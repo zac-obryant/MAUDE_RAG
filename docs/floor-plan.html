@@ -1,0 +1,575 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>MAUDE_RAG Plant</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Nunito:wght@700;800;900&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@500;700&display=swap">
+<style>
+/* Layout: a single drawing sheet. The floor plan leads, legend and room details sit beside it,
+   then the route walkthroughs and the station register read top to bottom.
+   Styling: ByteByteGo light, pastel rooms with thin colored outlines, numbered flow badges. One theme by choice. */
+:root {
+  --paper: #ffffff;
+  --floor: #f7f9fc;
+  --ink: #1d2433;
+  --ink-2: #4a5468;
+  --ink-3: #6b7489;
+  --rule: #dfe4ee;
+  --wall: #2a3346;
+
+  /* zones */
+  --build-bg: #fff4d6; --build-ln: #d99a1f;
+  --store-bg: #e7f0ff; --store-ln: #4f7fd9;
+  --prod-bg:  #e3f6ea; --prod-ln:  #2f9e64;
+  --util-bg:  #f0e9ff; --util-ln:  #7c5cd6;
+  --qc-bg:    #ffe9ef; --qc-ln:    #d4517a;
+  --docs-bg:  #eef1f5; --docs-ln:  #7a8598;
+  --ext-bg:   #ffffff; --ext-ln:   #8a94a6;
+
+  /* flows */
+  --f-build: #d99a1f;
+  --f-search: #2f9e64;
+  --f-count: #3b76d6;
+  --f-agent: #8b5cf6;
+  --f-llm: #c2417a;
+  --f-qc: #0f9aa6;
+  --live: #e08a00;
+  --aisle: #f2c94c;
+
+  --display: "Nunito", ui-rounded, "Segoe UI", system-ui, sans-serif;
+  --body: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  color-scheme: light;
+}
+* { box-sizing: border-box; }
+body {
+  background: var(--paper);
+  color: var(--ink);
+  font: 15px/1.55 var(--body);
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 28px 56px;
+}
+::selection { background: #cfe0ff; color: var(--ink); }
+a { color: var(--store-ln); text-underline-offset: 3px; }
+a:focus-visible, button:focus-visible, [tabindex]:focus-visible { outline: 2px solid var(--store-ln); outline-offset: 2px; border-radius: 4px; }
+code, .mono { font-family: var(--mono); font-size: 0.86em; }
+.wrap { max-width: 1520px; margin: 0 auto; display: grid; grid-template-columns: minmax(0, 1fr); gap: 40px; }
+
+header { display: grid; gap: 10px; max-width: 900px; }
+h1 { font: 900 clamp(2rem, 4vw, 3rem)/1.05 var(--display); letter-spacing: -0.02em; margin: 0; text-wrap: balance; }
+h1 .us { color: var(--prod-ln); }
+.lede { margin: 0; color: var(--ink-2); max-width: 68ch; font-size: 1.04rem; }
+.meta { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; }
+.chip { font: 600 12px/1 var(--body); padding: 6px 10px; border-radius: 999px; background: var(--floor); border: 1px solid var(--rule); color: var(--ink-2); }
+.chip b { color: var(--ink); font-weight: 600; }
+
+h2 { font: 800 1.45rem/1.2 var(--display); letter-spacing: -0.01em; margin: 0 0 6px; text-wrap: balance; }
+.sub { margin: 0 0 18px; color: var(--ink-2); max-width: 70ch; }
+
+/* plan + side panel */
+.sheet { display: grid; grid-template-columns: minmax(0, 1fr) 330px; gap: 20px; align-items: start; }
+.plan { min-width: 0; border: 1px solid var(--rule); border-radius: 14px; background: var(--floor); overflow-x: auto; }
+.plan svg { display: block; width: 100%; min-width: 980px; height: auto; }
+aside { display: grid; gap: 16px; min-width: 0; }
+.panel { border: 1px solid var(--rule); border-radius: 14px; padding: 16px; background: var(--paper); min-width: 0; }
+.panel h3 { font: 800 0.95rem/1.2 var(--display); margin: 0 0 10px; letter-spacing: 0.01em; }
+
+.routes { display: flex; flex-wrap: wrap; gap: 6px; }
+.routes button {
+  font: 600 12.5px/1 var(--body); color: var(--ink); cursor: pointer;
+  padding: 8px 11px; border-radius: 999px; border: 1.5px solid var(--rule); background: var(--paper);
+  display: inline-flex; align-items: center; gap: 7px; transition: background .2s, border-color .2s;
+}
+.routes button i { width: 10px; height: 10px; border-radius: 50%; background: var(--c); }
+.routes button:hover { border-color: var(--c, var(--ink-3)); }
+.routes button[aria-pressed="true"] { background: color-mix(in srgb, var(--c, var(--ink)) 20%, white); border-color: var(--c, var(--ink)); box-shadow: inset 0 0 0 1px var(--c, var(--ink)); }
+
+.key { display: grid; gap: 7px; margin: 0; padding: 0; list-style: none; font-size: 13px; color: var(--ink-2); }
+.key li { display: grid; grid-template-columns: 34px 1fr; align-items: center; gap: 10px; }
+.key svg { width: 34px; height: 18px; overflow: visible; }
+.key b { color: var(--ink); font-weight: 600; }
+.keygroup + .keygroup { margin-top: 14px; padding-top: 14px; border-top: 1px dashed var(--rule); }
+.keygroup h4 { margin: 0 0 8px; font: 700 11px/1 var(--body); letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-3); }
+
+.detail .no { font: 700 12px/1 var(--mono); color: var(--zc, var(--ink-3)); }
+.detail h3 { font: 800 1.15rem/1.2 var(--display); margin: 6px 0 2px; }
+.detail .file { font: 700 13px/1.3 var(--mono); color: var(--ink-2); margin: 0 0 10px; word-break: break-word; }
+.detail p { margin: 0 0 10px; font-size: 14px; }
+.detail dl { display: grid; grid-template-columns: 74px 1fr; gap: 6px 10px; margin: 0 0 12px; font-size: 13px; }
+.detail dt { color: var(--ink-3); font-weight: 600; }
+.detail dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.cmd { display: block; background: #f3f5f9; border: 1px solid var(--rule); border-radius: 8px; padding: 8px 10px; font: 500 12px/1.45 var(--mono); overflow-x: auto; white-space: pre; margin: 0 0 10px; }
+.flag { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: #8a5300; background: #fff4e0; border: 1px solid #f4cf8f; border-radius: 8px; padding: 6px 9px; margin: 0 0 10px; }
+.flag svg { flex: none; }
+
+/* svg */
+.room rect.body { stroke-width: 1.6; rx: 8; transition: opacity .25s, filter .25s; }
+.room { cursor: pointer; }
+.room:hover rect.body, .room.sel rect.body { filter: drop-shadow(0 4px 10px rgba(29,36,51,.14)); }
+.room.sel rect.body { stroke-width: 2.6; }
+.room text { pointer-events: none; }
+.t-no { font: 700 10px var(--mono); }
+.t-file { font: 700 12.5px var(--mono); fill: var(--ink); }
+.t-role { font: 600 11px var(--body); fill: var(--ink-2); }
+.t-area { font: 500 10px var(--mono); fill: var(--ink-3); }
+.t-ext { font: 800 13px var(--display); fill: var(--ink); }
+.t-ext2 { font: 500 10.5px var(--body); fill: var(--ink-3); }
+.t-zone { font: 800 11px var(--display); letter-spacing: 0.12em; fill: var(--ink-3); text-transform: uppercase; }
+.t-grid { font: 700 10px var(--mono); fill: #9aa3b5; }
+.t-tb { font: 500 10px var(--body); fill: var(--ink-2); }
+.t-tbh { font: 800 12px var(--display); fill: var(--ink); }
+.flow path { fill: none; stroke-width: 2.4; stroke-linejoin: round; transition: opacity .25s; }
+.flow.llm path { stroke-dasharray: 7 5; }
+.flow.qc path { stroke-dasharray: 2 5; stroke-linecap: round; stroke-width: 2.6; }
+.badge circle { stroke: #fff; stroke-width: 2; }
+.badge text { font: 800 11px var(--display); fill: #fff; text-anchor: middle; dominant-baseline: central; }
+.dim { opacity: 0.16; }
+.run path { stroke-dasharray: 8 6; animation: march 1.1s linear infinite; }
+.run.qc path { stroke-dasharray: 2 5; }
+@keyframes march { to { stroke-dashoffset: -28; } }
+@media (prefers-reduced-motion: reduce) { .run path { animation: none; } }
+
+/* walkthroughs */
+.flows { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 18px; }
+.flowcard { border: 1px solid var(--rule); border-radius: 14px; padding: 18px; background: var(--paper); min-width: 0; }
+.flowcard h3 { display: flex; align-items: center; gap: 9px; font: 800 1.05rem/1.2 var(--display); margin: 0 0 4px; }
+.flowcard h3 i { width: 12px; height: 12px; border-radius: 50%; background: var(--c); flex: none; }
+.flowcard .when { margin: 0 0 12px; font-size: 13px; color: var(--ink-3); }
+.flowcard ol { margin: 0; padding: 0; list-style: none; display: grid; gap: 10px; counter-reset: s; }
+.flowcard li { display: grid; grid-template-columns: 24px 1fr; gap: 10px; font-size: 14px; align-items: start; }
+.flowcard li::before { counter-increment: s; content: counter(s); width: 22px; height: 22px; border-radius: 50%; background: var(--c); color: #fff; font: 800 11px/22px var(--display); text-align: center; }
+.flowcard li.q::before { content: "Q"; background: var(--ink); }
+.flowcard li.q { counter-increment: none; }
+
+/* register */
+.tablewrap { overflow-x: auto; border: 1px solid var(--rule); border-radius: 14px; }
+table { border-collapse: collapse; width: 100%; min-width: 860px; font-size: 13.5px; }
+th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--rule); vertical-align: top; }
+th { font: 700 11px/1.2 var(--body); letter-spacing: 0.07em; text-transform: uppercase; color: var(--ink-3); background: var(--floor); }
+tr:last-child td { border-bottom: 0; }
+td.num { font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
+td .z { display: inline-block; width: 10px; height: 10px; border-radius: 3px; border: 1.5px solid var(--zl); background: var(--zb); margin-right: 7px; vertical-align: -1px; }
+tbody tr { cursor: pointer; }
+tbody tr:hover { background: var(--floor); }
+
+footer { color: var(--ink-3); font-size: 12.5px; max-width: 90ch; }
+
+@media (max-width: 1100px) { .sheet { grid-template-columns: minmax(0, 1fr); } aside { grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); } }
+</style>
+
+<div class="wrap">
+  <header>
+    <h1>MAUDE<span class="us">_</span>RAG Plant</h1>
+    <p class="lede">The codebase drawn as a factory floor. FDA adverse event reports arrive at the receiving dock, get processed into two stores, and three production cells turn your question into an answer. Each room is one Python file, and its floor area is set by the file's real line count.</p>
+    <div class="meta">
+      <span class="chip">Branch <b>step-2-hybrid-search-and-eval</b></span>
+      <span class="chip">Commit <b>137edfa</b></span>
+      <span class="chip">Procedure <b>Rev E</b></span>
+      <span class="chip"><b>1,492</b> lines of Python</span>
+      <span class="chip"><b>2,984</b> reports in stock</span>
+    </div>
+  </header>
+
+  <section class="sheet" aria-label="Floor plan">
+    <div class="plan"><svg id="plan" viewBox="0 0 1240 880" role="img" aria-label="Floor plan of the MAUDE_RAG codebase"></svg></div>
+    <aside>
+      <div class="panel">
+        <h3>Show a route</h3>
+        <div class="routes" id="routes">
+          <button type="button" data-route="all" aria-pressed="true" style="--c: var(--ink)"><i></i>Everything</button>
+          <button type="button" data-route="build" aria-pressed="false" style="--c: var(--f-build)"><i></i>Build the stores</button>
+          <button type="button" data-route="search" aria-pressed="false" style="--c: var(--f-search)"><i></i>Search</button>
+          <button type="button" data-route="count" aria-pressed="false" style="--c: var(--f-count)"><i></i>Count</button>
+          <button type="button" data-route="agent" aria-pressed="false" style="--c: var(--f-agent)"><i></i>Agent</button>
+          <button type="button" data-route="qc" aria-pressed="false" style="--c: var(--f-qc)"><i></i>Quality checks</button>
+        </div>
+      </div>
+      <div class="panel detail" id="detail" aria-live="polite"></div>
+      <div class="panel">
+        <h3>Legend</h3>
+        <div class="keygroup">
+          <h4>Zones</h4>
+          <ul class="key" id="key-zones"></ul>
+        </div>
+        <div class="keygroup">
+          <h4>Lines</h4>
+          <ul class="key" id="key-lines"></ul>
+        </div>
+        <div class="keygroup">
+          <h4>Marks</h4>
+          <ul class="key" id="key-marks"></ul>
+        </div>
+      </div>
+    </aside>
+  </section>
+
+  <section aria-labelledby="h-flows">
+    <h2 id="h-flows">How the plant runs</h2>
+    <p class="sub">One build shift fills the stores. After that, every question enters at dispatch and is sent to one of three cells. The numbers match the badges on the plan.</p>
+    <div class="flows" id="flows"></div>
+  </section>
+
+  <section aria-labelledby="h-reg">
+    <h2 id="h-reg">Station register</h2>
+    <p class="sub">Every room on the plan, what it takes in and what it sends on. Select a row to find the room on the plan.</p>
+    <div class="tablewrap"><table>
+      <thead><tr><th>Room</th><th>File</th><th>Station</th><th class="num">Lines</th><th>Takes in</th><th>Sends on</th></tr></thead>
+      <tbody id="register"></tbody>
+    </table></div>
+  </section>
+
+  <footer>Drawn from the repository at commit 137edfa. Room areas use <code>wc -l</code> line counts at 150 square units per line; storage, documents and outside suppliers are marked NTS (not to scale). Conveyors follow the actual <code>import</code> statements. The counting cell, dispatch office, agent cell and LLM gauge were built and unit-tested but have not yet run against the Anthropic API.</footer>
+</div>
+
+<script>
+const REPO = "https://github.com/zander31/MAUDE_RAG/blob/step-2-hybrid-search-and-eval/";
+const ZONES = {
+  build: { name: "Receiving & processing", bg: "--build-bg", ln: "--build-ln" },
+  store: { name: "Storage", bg: "--store-bg", ln: "--store-ln" },
+  prod:  { name: "Production cells (answering)", bg: "--prod-bg", ln: "--prod-ln" },
+  util:  { name: "Utilities", bg: "--util-bg", ln: "--util-ln" },
+  qc:    { name: "Quality lab", bg: "--qc-bg", ln: "--qc-ln" },
+  docs:  { name: "Document control", bg: "--docs-bg", ln: "--docs-ln" },
+};
+const K = 150; // square units of floor per line of code
+
+const ROOMS = [
+  { id: "ingest", no: "R-1", zone: "build", file: "maude_rag/ingest.py", short: "ingest.py", role: "Receiving dock", loc: 103, x: 90, y: 300, w: 160,
+    what: "Downloads insulin pump reports from openFDA, 250 per month, spread across every day of the month, and keeps only the fields the plant uses.",
+    takes: "openFDA device event API", sends: "data/reports.jsonl", cmd: "python -m maude_rag.ingest", doc: "ingest" },
+  { id: "index", no: "R-2", zone: "build", file: "maude_rag/index.py", short: "index.py", role: "Processing line", loc: 83, x: 300, y: 300, w: 150,
+    what: "Cuts each narrative into 150-word chunks with 30 words of overlap, turns each chunk into a vector, and fills both stores in one run.",
+    takes: "data/reports.jsonl", sends: "data/chroma, and data/reports.db via sql.build", cmd: "python -m maude_rag.index", doc: "index" },
+  { id: "jsonl", no: "S-1", zone: "store", file: "data/reports.jsonl", short: "reports.jsonl", role: "Raw report store", size: "3.1 MB · 2,984 reports", x: 90, y: 430, w: 160, h: 90,
+    what: "One trimmed report per line: report number, date, event type, brand, manufacturer, product code, coded problems and the reporter's narrative.",
+    takes: "ingest.py", sends: "index.py, sql.build, ask.values, evaluate.py", nts: true },
+  { id: "chroma", no: "S-2", zone: "store", file: "data/chroma", short: "chroma/", role: "Vector warehouse", size: "37 MB · 3,230 chunks", x: 300, y: 420, w: 150, h: 100,
+    what: "Chroma database holding every chunk, its vector and its report metadata. It applies the filters before ranking.",
+    takes: "index.py", sends: "ask.retrieve", nts: true },
+  { id: "db", no: "S-3", zone: "store", file: "data/reports.db", short: "reports.db", role: "Counting store", size: "2.4 MB · SQLite", x: 300, y: 545, w: 150, h: 75,
+    what: "The same reports as two tables, reports and problems, for counting. Opened read-only whenever the LLM's query runs.",
+    takes: "sql.build (called by index.py)", sends: "sql.run_sql", nts: true },
+  { id: "router", no: "P-1", zone: "prod", file: "maude_rag/router.py", short: "router.py", role: "Dispatch office", loc: 117, x: 300, y: 650, w: 195, llm: true, notLive: true,
+    what: "Reads the question with one quick LLM call and sends it to search, count or agent. It also pulls out any filters the question states, such as a brand or a date range.",
+    takes: "Your question", sends: "ask.py, sql.py or agent.py", cmd: 'python -m maude_rag.router "What do reports say about pumps getting wet?"', doc: "router" },
+  { id: "ask", no: "P-2", zone: "prod", file: "maude_rag/ask.py", short: "ask.py", role: "Search cell", loc: 215, x: 510, y: 300, w: 210, llm: true,
+    what: "Runs vector search and keyword search, merges them, applies filters, and has the LLM answer from the top 8 chunks with report numbers cited. Also offers --json for the validation harness.",
+    takes: "Question and filters; chunks from the vector warehouse", sends: "Answer with citations", cmd: 'python -m maude_rag.ask "What problems are reported with infusion sets?"', doc: "ask" },
+  { id: "keyword", no: "P-3", zone: "prod", file: "maude_rag/keyword.py", short: "keyword.py", role: "Keyword press", loc: 48, x: 510, y: 470, w: 110,
+    what: "BM25 keyword scoring and reciprocal rank fusion, which merges the keyword list with the vector list. Plain Python, no package.",
+    takes: "Question and candidate chunks", sends: "Scores and merged ranking to ask.py", doc: "keyword" },
+  { id: "sql", no: "P-4", zone: "prod", file: "maude_rag/sql.py", short: "sql.py", role: "Counting cell", loc: 173, x: 510, y: 560, w: 190, llm: true, notLive: true,
+    what: "The LLM writes one SQL query, which runs read-only, SELECT only, one statement, with a 10-second cut-off. A failed query gets one retry, then the LLM explains the counts.",
+    takes: "Counting question; the counting store", sends: "Query, table and explanation", cmd: 'python -m maude_rag.sql "How many injury reports did each manufacturer have?"', doc: "sql" },
+  { id: "agent", no: "P-5", zone: "prod", file: "maude_rag/agent.py", short: "agent.py", role: "Agent cell", loc: 179, x: 750, y: 300, w: 190, llm: true, notLive: true,
+    what: "The LLM chooses among three tools: search the reports, run a count, and look up FDA recalls live. It has at most 10 rounds, and every call is printed with a preview of its result.",
+    takes: "Multi-step question", sends: "Answer citing report and recall numbers", cmd: 'python -m maude_rag.agent "Compare Tandem and Insulet, then check for recalls"', doc: "agent" },
+  { id: "config", no: "U-1", zone: "util", file: "maude_rag/config.py", short: "config.py", role: "Settings board", loc: 37, x: 300, y: 130, w: 110,
+    what: "Every shared setting: file paths, product codes, embedding model, chunk size, answer model, top-k, row cap, recall address and agent step limit.",
+    takes: "Nothing", sends: "Settings to every room", doc: "config" },
+  { id: "llm", no: "U-2", zone: "util", file: "maude_rag/llm.py", short: "llm.py", role: "LLM power room", loc: 54, x: 430, y: 130, w: 130,
+    what: "The one connection to Claude. It handles refusals by retrying on a fallback model, catches cut-off replies, asks for checked JSON when needed, and records which model served the call.",
+    takes: "Prompts from router, ask and sql; the client for agent", sends: "Requests to the Anthropic API", doc: "llm" },
+  { id: "evaluate", no: "Q-1", zone: "qc", file: "maude_rag/evaluate.py", short: "evaluate.py", role: "Retrieval gauge", loc: 125, x: 990, y: 130, w: 150,
+    what: "Scores vector, keyword and hybrid search on 20 questions by hit rate, precision and MRR. No API key needed.",
+    takes: "eval/questions.json; ask.retrieve", sends: "Score tables to eval/results", cmd: "python -m maude_rag.evaluate -v", doc: "evaluate" },
+  { id: "evaluate_llm", no: "Q-2", zone: "qc", file: "maude_rag/evaluate_llm.py", short: "evaluate_llm.py", role: "LLM gauge", loc: 106, x: 990, y: 270, w: 150, notLive: true,
+    what: "Checks the counting cell against 12 reference queries and the dispatch office against 41 expected routes. Each question costs API calls.",
+    takes: "eval/counting.json, routing.json, questions.json", sends: "Accuracy and a routing breakdown", cmd: "python -m maude_rag.evaluate_llm --suite counting -v", doc: "evaluate_llm" },
+  { id: "tests", no: "Q-3", zone: "qc", file: "tests/", short: "tests/", role: "Unit test bench", loc: 252, x: 990, y: 390, w: 150,
+    what: "32 small tests across two files. Claude is replaced by stand-ins, so they run in seconds with no key or internet. They include the guards that stop a query from changing the database.",
+    takes: "Functions from every room", sends: "Pass or fail", cmd: "python -m pytest", doc: "tests" },
+  { id: "evalsets", no: "S-4", zone: "store", file: "eval/", short: "eval/", role: "Test sets & records", size: "20 + 12 + 9 questions", x: 990, y: 660, w: 150, h: 80,
+    what: "The questions and their correct answers, plus dated result records that are never overwritten. Drafted by Claude; review by a person is still pending.",
+    takes: "Written by hand; results from the gauges", sends: "evaluate.py, evaluate_llm.py", nts: true },
+  { id: "docs", no: "D-1", zone: "docs", file: "README.md · docs/explainers/", short: "README · docs/", role: "Document control", size: "Rev D · 12 explainers", x: 90, y: 650, w: 170, h: 90,
+    what: "The procedure (README, laid out like a quality system procedure) and one plain-language explainer per code file. Each explainer step gives the code, plain steps, key elements and an explanation.",
+    takes: "Every code change", sends: "Readers", nts: true },
+];
+for (const r of ROOMS) if (r.loc) r.h = r.loc * K / r.w;
+
+const EXT = [
+  { id: "fda_events", label: "openFDA device event API", sub: "Adverse event reports, read once", x: 70, y: 18, w: 210, h: 58, gate: 170 },
+  { id: "anthropic", label: "Anthropic API", sub: "Claude, claude-opus-5-5", x: 410, y: 18, w: 170, h: 58, gate: 495 },
+  { id: "fda_recalls", label: "openFDA device recall API", sub: "Recalls, fetched live by the agent", x: 760, y: 18, w: 220, h: 58, gate: 870 },
+  { id: "user", label: "You", sub: "Question in, answer out", x: 320, y: 796, w: 160, h: 56, gate: 400 },
+];
+
+// flows: points, type, routes, badge [x, y, label]
+const FLOWS = [
+  { id: "b1", type: "build", pts: [[170,76],[170,300]], badge: [170,200,"1"] },
+  { id: "b2", type: "build", pts: [[170,397],[170,430]], badge: [194,413,"2"] },
+  { id: "b3", type: "build", pts: [[250,475],[275,475],[275,341],[300,341]], badge: [275,420,"3"] },
+  { id: "b4", type: "build", pts: [[375,383],[375,420]], badge: [399,401,"4"] },
+  { id: "b5", type: "build", pts: [[450,362],[465,362],[465,582],[450,582]], badge: [465,520,"5"] },
+  { id: "q0", type: "question", pts: [[400,796],[400,740]], both: true, badge: [424,768,"Q"] },
+  { id: "s2", type: "search", pts: [[495,668],[484,668],[484,380],[510,380]], badge: [484,640,"2"] },
+  { id: "s3", type: "search", pts: [[450,440],[510,440]], badge: [497,425,"3"] },
+  { id: "s4", type: "search", pts: [[565,454],[565,470]], badge: [589,462,"4"] },
+  { id: "c2", type: "count", pts: [[495,690],[510,690]], badge: [502,712,"2"] },
+  { id: "c3", type: "count", pts: [[450,600],[510,600]], badge: [497,586,"3"] },
+  { id: "a2", type: "agent", pts: [[495,725],[735,725],[735,372],[750,372]], badge: [620,725,"2"] },
+  { id: "a3", type: "agent", pts: [[750,330],[720,330]], badge: [735,312,"3"] },
+  { id: "a4", type: "agent", pts: [[800,441],[800,620],[700,620]], badge: [800,500,"4"] },
+  { id: "a5", type: "agent", pts: [[880,300],[880,76]], badge: [880,180,"5"] },
+  { id: "l1", type: "llm", pts: [[495,76],[495,130]], both: true },
+  { id: "q1", type: "qc", pts: [[990,236],[640,236],[640,300]] },
+  { id: "q2", type: "qc", pts: [[990,352],[962,352],[962,580],[700,580]] },
+];
+const FLOW_COLOR = { build: "--f-build", search: "--f-search", count: "--f-count", agent: "--f-agent", llm: "--f-llm", qc: "--f-qc", question: "--ink" };
+
+const ROUTES = {
+  build:  { rooms: ["fda_events","ingest","jsonl","index","chroma","db","config"], flows: ["b1","b2","b3","b4","b5"] },
+  search: { rooms: ["user","router","ask","keyword","chroma","llm","anthropic","config"], flows: ["q0","s2","s3","s4","l1"] },
+  count:  { rooms: ["user","router","sql","db","llm","anthropic","config"], flows: ["q0","c2","c3","l1"] },
+  agent:  { rooms: ["user","router","agent","ask","keyword","chroma","sql","db","fda_recalls","llm","anthropic","config"], flows: ["q0","a2","a3","a4","a5","l1"] },
+  qc:     { rooms: ["evaluate","evaluate_llm","tests","evalsets","ask","sql","router"], flows: ["q1","q2"] },
+};
+
+const css = v => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+const NS = "http://www.w3.org/2000/svg";
+const el = (tag, attrs = {}, parent) => { const e = document.createElementNS(NS, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); if (parent) parent.appendChild(e); return e; };
+const txt = (parent, x, y, cls, s, extra = {}) => { const t = el("text", { x, y, class: cls, ...extra }, parent); t.textContent = s; return t; };
+
+const svg = document.getElementById("plan");
+const defs = el("defs", {}, svg);
+for (const [type, v] of Object.entries(FLOW_COLOR)) {
+  const m = el("marker", { id: "arr-" + type, viewBox: "0 0 10 10", refX: 8.5, refY: 5, markerWidth: 7, markerHeight: 7, orient: "auto-start-reverse" }, defs);
+  el("path", { d: "M0,0 L10,5 L0,10 z", fill: css(v) }, m);
+}
+
+// floor and walls
+el("rect", { x: 70, y: 110, width: 1100, height: 650, fill: "#ffffff" }, svg);
+// aisle markings (painted floor lines)
+const aisle = el("g", { "aria-hidden": "true" }, svg);
+for (const y of [258, 290]) el("line", { x1: 72, x2: 973, y1: y, y2: y, stroke: css("--aisle"), "stroke-width": 2, "stroke-dasharray": "14 8" }, aisle);
+txt(aisle, 90, 279, "t-zone", "Main aisle", { fill: "#b8922a" });
+// interior partitions
+const part = { fill: "none", stroke: css("--wall"), "stroke-width": 1.4, opacity: 0.55 };
+el("path", { d: "M975 110 V226 M975 246 V342 M975 362 V760", ...part }, svg);                    // quality lab wall, two doors
+el("path", { d: "M285 110 V212 H592 V110", ...part, "stroke-dasharray": "0" }, svg);             // utility room
+el("path", { d: "M70 632 H276 V760", ...part }, svg);                                            // document office
+txt(svg, 1146, 754, "t-zone", "Quality lab", { "text-anchor": "end" });
+txt(svg, 576, 205, "t-zone", "Utility room", { "text-anchor": "end" });
+// outer wall with gates
+const W = 6, gates = EXT.filter(e => e.id !== "user").map(e => e.gate);
+let topWall = "M70 110";
+for (const g of gates.sort((a, b) => a - b)) { topWall += ` H${g - 14} M${g + 14} 110`; }
+topWall += " H1170";
+el("path", { d: topWall, stroke: css("--wall"), "stroke-width": W, fill: "none", "stroke-linecap": "square" }, svg);
+el("path", { d: "M1170 110 V760 H414 M386 760 H70 V110", stroke: css("--wall"), "stroke-width": W, fill: "none", "stroke-linecap": "square" }, svg);
+// door swing at the south entrance
+el("path", { d: "M386 760 A28 28 0 0 1 414 732", fill: "none", stroke: css("--wall"), "stroke-width": 1.2, "stroke-dasharray": "3 3" }, svg);
+el("line", { x1: 414, y1: 760, x2: 414, y2: 732, stroke: css("--wall"), "stroke-width": 2 }, svg);
+
+// grid bubbles
+const grid = el("g", { "aria-hidden": "true" }, svg);
+[["A",170],["B",375],["C",615],["D",845],["E",1065]].forEach(([l, x]) => { el("circle", { cx: x, cy: 776, r: 9, fill: "#fff", stroke: "#c3cad8" }, grid); txt(grid, x, 779.5, "t-grid", l, { "text-anchor": "middle" }); });
+[["1",160],["2",340],["3",480],["4",600],["5",700]].forEach(([l, y]) => { el("circle", { cx: 48, cy: y, r: 9, fill: "#fff", stroke: "#c3cad8" }, grid); txt(grid, 48, y + 3.5, "t-grid", l, { "text-anchor": "middle" }); });
+
+// north arrow
+const na = el("g", { transform: "translate(1205 150)", "aria-hidden": "true" }, svg);
+el("path", { d: "M0 -26 L9 6 L0 0 L-9 6 Z", fill: css("--ink") }, na);
+txt(na, 0, 22, "t-tbh", "N", { "text-anchor": "middle" });
+
+// flows layer (below rooms' labels? above floor)
+const flowLayer = el("g", {}, svg);
+const roomLayer = el("g", {}, svg);
+const badgeLayer = el("g", {}, svg);
+
+const flowEls = {};
+for (const f of FLOWS) {
+  const g = el("g", { class: `flow ${f.type}`, "data-id": f.id }, flowLayer);
+  const d = "M" + f.pts.map(p => p.join(" ")).join(" L");
+  el("path", { d, stroke: css(FLOW_COLOR[f.type]), "marker-end": `url(#arr-${f.type})`, ...(f.both ? { "marker-start": `url(#arr-${f.type})` } : {}) }, g);
+  flowEls[f.id] = g;
+  if (f.badge) {
+    const [bx, by, label] = f.badge;
+    const b = el("g", { class: "badge", "data-id": f.id }, badgeLayer);
+    el("circle", { cx: bx, cy: by, r: 10.5, fill: css(FLOW_COLOR[f.type]) }, b);
+    txt(b, bx, by + 0.5, "", label);
+    flowEls[f.id + "-b"] = b;
+  }
+}
+
+// small icons
+function bolt(parent, x, y) { // LLM tag: purple pill with a drawn bolt
+  const g = el("g", { transform: `translate(${x} ${y})` }, parent);
+  el("rect", { x: 0, y: 0, width: 36, height: 16, rx: 8, fill: css("--util-ln") }, g);
+  el("path", { d: "M8 2.5 L4.5 8.8 H7.6 L6.4 13.5 L10.4 6.9 H7.4 Z", fill: "#fff" }, g);
+  txt(g, 13, 11.7, "", "LLM", { style: "font:800 9px var(--display);fill:#fff" });
+}
+function liveMark(parent, x, y) {
+  const g = el("g", { transform: `translate(${x} ${y})` }, parent);
+  el("circle", { cx: 0, cy: 0, r: 6, fill: "#fff", stroke: css("--live"), "stroke-width": 2.2 }, g);
+  el("circle", { cx: 0, cy: 0, r: 2, fill: css("--live") }, g);
+  el("title", {}, g).textContent = "Built and unit-tested; not yet run against the Anthropic API";
+}
+function nts(parent, x, y) {
+  const g = el("g", { transform: `translate(${x} ${y})` }, parent);
+  el("rect", { x: 0, y: 0, width: 28, height: 14, rx: 3, fill: "#fff", stroke: "#b5bdcc" }, g);
+  txt(g, 14, 10.3, "", "NTS", { "text-anchor": "middle", style: "font:700 8.5px var(--mono);fill:#7a8598" });
+}
+
+const roomEls = {};
+function drawRoom(r) {
+  const z = ZONES[r.zone];
+  const g = el("g", { class: "room", tabindex: 0, role: "button", "data-id": r.id, "aria-label": `${r.no} ${r.short}, ${r.role}` }, roomLayer);
+  el("rect", { class: "body", x: r.x, y: r.y, width: r.w, height: r.h, rx: 8, fill: css(z.bg), stroke: css(z.ln), ...(r.nts ? { "stroke-dasharray": "5 3" } : {}) }, g);
+  txt(g, r.x + 9, r.y + 15, "t-no", r.no, { fill: css(z.ln) });
+  txt(g, r.x + 9, r.y + 31, "t-file", r.short);
+  const area = r.loc ? `${r.loc} lines` : r.size;
+  if (r.h >= 74) { txt(g, r.x + 9, r.y + 46, "t-role", r.role); txt(g, r.x + 9, r.y + r.h - 9, "t-area", area); }
+  else { txt(g, r.x + 9, r.y + r.h - 9, "t-role", r.role); txt(g, r.x + r.w - 9, r.y + 15, "t-area", area, { "text-anchor": "end" }); }
+  let tx = r.x + r.w - 9;
+  if (r.llm) { tx -= 36; bolt(g, tx, r.y + 6); tx -= 6; }
+  if (r.notLive) { liveMark(g, tx - 6, r.y + 14); tx -= 18; }
+  if (r.nts) nts(g, r.x + r.w - 37, r.y + 6);
+  g.addEventListener("click", () => select(r.id));
+  g.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); select(r.id); } });
+  roomEls[r.id] = g;
+}
+ROOMS.forEach(drawRoom);
+
+for (const e of EXT) {
+  const g = el("g", { class: "ext", "data-id": e.id }, roomLayer);
+  el("rect", { x: e.x, y: e.y, width: e.w, height: e.h, rx: 10, fill: css("--ext-bg"), stroke: css("--ext-ln"), "stroke-width": 1.4, "stroke-dasharray": "6 4" }, g);
+  txt(g, e.x + 12, e.y + 24, "t-ext", e.label);
+  txt(g, e.x + 12, e.y + 42, "t-ext2", e.sub);
+  roomEls[e.id] = g;
+}
+
+
+// title block
+const tb = el("g", { "aria-hidden": "true" }, svg);
+el("rect", { x: 870, y: 784, width: 300, height: 76, fill: "#fff", stroke: css("--wall"), "stroke-width": 1.2 }, tb);
+el("line", { x1: 870, x2: 1170, y1: 806, y2: 806, stroke: css("--rule") }, tb);
+el("line", { x1: 1060, x2: 1060, y1: 806, y2: 860, stroke: css("--rule") }, tb);
+txt(tb, 880, 800, "t-tbh", "MAUDE_RAG · Floor plan, Rev E");
+txt(tb, 880, 822, "t-tb", "Drawn 2026-11-13 · commit 137edfa");
+txt(tb, 880, 838, "t-tb", "Area: 1 line of code = 150 sq units");
+txt(tb, 880, 854, "t-tb", "NTS: storage, docs, suppliers");
+txt(tb, 1070, 822, "t-tb", "Sheet 1 of 1");
+txt(tb, 1070, 838, "t-tb", "17 rooms");
+txt(tb, 1070, 854, "t-tb", "4 gates");
+
+// legend
+const keyZ = document.getElementById("key-zones");
+for (const [k, z] of Object.entries(ZONES)) {
+  keyZ.insertAdjacentHTML("beforeend", `<li><svg viewBox="0 0 34 18"><rect x="1" y="1" width="32" height="16" rx="4" fill="var(${z.bg})" stroke="var(${z.ln})" stroke-width="1.5"/></svg><span><b>${z.name}</b></span></li>`);
+}
+keyZ.insertAdjacentHTML("beforeend", `<li><svg viewBox="0 0 34 18"><rect x="1" y="1" width="32" height="16" rx="4" fill="#fff" stroke="var(--ext-ln)" stroke-width="1.4" stroke-dasharray="5 3"/></svg><span><b>Outside supplier or visitor</b>, beyond the wall</span></li>`);
+const line = (stroke, dash = "", w = 2.4) => `<svg viewBox="0 0 34 18"><line x1="2" y1="9" x2="29" y2="9" stroke="${stroke}" stroke-width="${w}" ${dash ? `stroke-dasharray="${dash}" stroke-linecap="round"` : ""}/><path d="M28 5 L34 9 L28 13 z" fill="${stroke}"/></svg>`;
+document.getElementById("key-lines").innerHTML = [
+  [line("var(--f-build)"), "<b>Build conveyor</b>: data moving into the stores"],
+  [line("var(--f-search)"), "<b>Search route</b>: reading what reports say"],
+  [line("var(--f-count)"), "<b>Count route</b>: SQL over the counting store"],
+  [line("var(--f-agent)"), "<b>Agent route</b>: tools called in a loop"],
+  [line("var(--f-llm)", "7 5"), "<b>Utility feed</b>: every LLM call goes out through llm.py"],
+  [line("var(--f-qc)", "2 5", 2.6), "<b>Inspection</b>: a gauge measuring a cell"],
+].map(([s, t]) => `<li>${s}<span>${t}</span></li>`).join("");
+document.getElementById("key-marks").innerHTML = [
+  [`<svg viewBox="0 0 34 18"><rect x="0" y="1" width="34" height="16" rx="8" fill="var(--util-ln)"/><text x="17" y="12.6" text-anchor="middle" style="font:800 9px var(--display);fill:#fff">LLM</text></svg>`, "<b>Draws power</b>: the room calls Claude"],
+  [`<svg viewBox="0 0 34 18"><circle cx="9" cy="9" r="6" fill="#fff" stroke="var(--live)" stroke-width="2.2"/><circle cx="9" cy="9" r="2" fill="var(--live)"/></svg>`, "<b>Not yet run live</b>: built and unit-tested, never called the API"],
+  [`<svg viewBox="0 0 34 18"><rect x="1" y="2" width="28" height="14" rx="3" fill="#fff" stroke="#b5bdcc"/><text x="15" y="12.3" text-anchor="middle" style="font:700 8.5px var(--mono);fill:#7a8598">NTS</text></svg>`, "<b>Not to scale</b>: room size is not lines of code"],
+  [`<svg viewBox="0 0 34 18"><circle cx="9" cy="9" r="8" fill="var(--f-search)"/><text x="9" y="9.5" text-anchor="middle" dominant-baseline="central" style="font:800 9px var(--display);fill:#fff">2</text></svg>`, "<b>Step badge</b>: order of travel on that route"],
+  [`<svg viewBox="0 0 34 18"><line x1="1" y1="5" x2="33" y2="5" stroke="var(--aisle)" stroke-width="2" stroke-dasharray="7 4"/><line x1="1" y1="13" x2="33" y2="13" stroke="var(--aisle)" stroke-width="2" stroke-dasharray="7 4"/></svg>`, "<b>Main aisle</b>, and grid bubbles A–E, 1–5 for locating rooms"],
+].map(([s, t]) => `<li>${s}<span>${t}</span></li>`).join("");
+
+// details panel
+const detail = document.getElementById("detail");
+function gridRef(r) {
+  const cols = [["A",0],["B",280],["C",490],["D",735],["E",975]], rows = [["1",0],["2",250],["3",420],["4",545],["5",640]];
+  const cx = r.x + r.w / 2, cy = r.y + r.h / 2;
+  const c = cols.filter(([, v]) => cx >= v).pop()[0], w = rows.filter(([, v]) => cy >= v).pop()[0];
+  return c + w;
+}
+function select(id) {
+  const r = ROOMS.find(x => x.id === id); if (!r) return;
+  Object.values(roomEls).forEach(g => g.classList.remove("sel"));
+  roomEls[id].classList.add("sel");
+  const z = ZONES[r.zone];
+  const area = r.loc ? `${r.loc} lines · ${Math.round(r.loc * K).toLocaleString()} sq units` : `${r.size} · not to scale`;
+  detail.style.setProperty("--zc", css(z.ln));
+  detail.innerHTML = `
+    <span class="no">${r.no} · grid ${gridRef(r)} · ${z.name}</span>
+    <h3>${r.role}</h3>
+    <p class="file">${r.file}</p>
+    ${r.notLive ? `<p class="flag"><svg width="14" height="14" viewBox="0 0 14 14"><circle cx="7" cy="7" r="5.5" fill="#fff" stroke="var(--live)" stroke-width="2"/><circle cx="7" cy="7" r="2" fill="var(--live)"/></svg>Built and unit-tested; not yet run against the API</p>` : ""}
+    <p>${r.what}</p>
+    <dl><dt>Takes in</dt><dd>${r.takes}</dd><dt>Sends on</dt><dd>${r.sends}</dd><dt>Floor area</dt><dd>${area}</dd></dl>
+    ${r.cmd ? `<code class="cmd">${r.cmd.replace(/</g,"&lt;")}</code>` : ""}
+    ${r.doc ? `<a href="${REPO}docs/explainers/${r.doc}.md" target="_blank" rel="noopener">Read the ${r.short} explainer</a>` : r.id === "docs" ? `<a href="${REPO}README.md" target="_blank" rel="noopener">Read the procedure (README)</a>` : ""}`;
+}
+
+// routes
+const buttons = [...document.querySelectorAll("#routes button")];
+function showRoute(name) {
+  buttons.forEach(b => b.setAttribute("aria-pressed", String(b.dataset.route === name)));
+  const all = name === "all";
+  const R = ROUTES[name] || { rooms: [], flows: [] };
+  for (const [id, g] of Object.entries(roomEls)) g.classList.toggle("dim", !all && !R.rooms.includes(id));
+  for (const f of FLOWS) {
+    const on = all || R.flows.includes(f.id);
+    flowEls[f.id].classList.toggle("dim", !on);
+    flowEls[f.id].classList.toggle("run", !all && on);
+    if (flowEls[f.id + "-b"]) flowEls[f.id + "-b"].classList.toggle("dim", !on);
+  }
+  try { localStorage.setItem("plant-route", name); } catch (e) {}
+}
+buttons.forEach(b => b.addEventListener("click", () => showRoute(b.dataset.route)));
+
+// walkthroughs
+const WALKS = [
+  { c: "--f-build", title: "Build the stores", when: "Run once, then again whenever the data is refreshed. No API key.", steps: [
+    "<b>ingest.py</b> fetches about 9 reports a day for every day of 2025 from the openFDA event API.",
+    "Trimmed reports land in <b>reports.jsonl</b>: 2,984 of them.",
+    "<b>index.py</b> cuts each narrative into overlapping 150-word chunks and turns them into vectors.",
+    "Chunks, vectors and metadata go to the <b>vector warehouse</b> (Chroma).",
+    "The same reports go to the <b>counting store</b> (SQLite), with each coded problem stored once." ] },
+  { c: "--f-search", title: "Search", when: "Questions about what reports say.", q: true, steps: [
+    "<b>router.py</b> picks search and pulls out any filters, such as Death or 780G.",
+    "<b>ask.py</b> searches the vector warehouse by meaning, with the filters applied first.",
+    "<b>keyword.py</b> scores the same pool by exact words, and the two lists are merged.",
+    "The top 8 chunks go to Claude through <b>llm.py</b>, which writes an answer citing report numbers." ] },
+  { c: "--f-count", title: "Count", when: "How many, how often, which is most common.", q: true, steps: [
+    "<b>router.py</b> picks count.",
+    "<b>sql.py</b> has Claude write one query against a description of the tables and real values.",
+    "The query runs read-only on the counting store; Claude then explains the table with the sample caveats." ] },
+  { c: "--f-agent", title: "Agent", when: "Several steps, comparisons, or anything about recalls.", q: true, steps: [
+    "<b>router.py</b> picks agent.",
+    "<b>agent.py</b> has Claude plan and call tools, up to 10 rounds.",
+    "Tool <b>search_reports</b> reuses the search cell.",
+    "Tool <b>run_sql</b> reuses the counting cell's read-only runner.",
+    "Tool <b>check_recalls</b> fetches insulin pump recalls live from openFDA, one entry per event." ] },
+  { c: "--f-qc", title: "Quality checks", when: "Run after any change. Gauges sit in the lab, outside the production flow.", steps: [
+    "<b>evaluate.py</b> scores the search cell on 20 questions. Free to run.",
+    "<b>evaluate_llm.py</b> scores the counting cell (12 questions) and dispatch (41 routes). Costs API calls.",
+    "<b>tests/</b> runs 32 unit tests with Claude replaced by stand-ins, including the database write guards." ] },
+];
+document.getElementById("flows").innerHTML = WALKS.map(w => `
+  <article class="flowcard" style="--c: var(${w.c})">
+    <h3><i></i>${w.title}</h3>
+    <p class="when">${w.when}</p>
+    <ol>${w.q ? `<li class="q">Your question enters through the south door.</li>` : ""}${w.steps.map(s => `<li>${s}</li>`).join("")}</ol>
+  </article>`).join("");
+
+// register
+document.getElementById("register").innerHTML = ROOMS.map(r => {
+  const z = ZONES[r.zone];
+  return `<tr data-id="${r.id}" tabindex="0"><td><span class="z" style="--zb: var(${z.bg}); --zl: var(${z.ln})"></span><span class="mono">${r.no}</span></td><td class="mono">${r.file}</td><td>${r.role}${r.notLive ? " <span style=\"color:#8a5300\">· not yet run live</span>" : ""}</td><td class="num">${r.loc ?? "NTS"}</td><td>${r.takes}</td><td>${r.sends}</td></tr>`;
+}).join("");
+document.querySelectorAll("#register tr").forEach(tr => {
+  const go = () => { select(tr.dataset.id); document.querySelector(".plan").scrollIntoView({ behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth", block: "start" }); };
+  tr.addEventListener("click", go);
+  tr.addEventListener("keydown", e => { if (e.key === "Enter") go(); });
+});
+
+select("router");
+let saved = "all"; try { saved = localStorage.getItem("plant-route") || "all"; } catch (e) {}
+showRoute(ROUTES[saved] || saved === "all" ? saved : "all");
+</script>

@@ -4,7 +4,7 @@
 |---|---|
 | **Document title** | Building and Running Question Answering over FDA MAUDE Reports |
 | **Document type** | Procedure |
-| **Revision** | D |
+| **Revision** | E |
 | **Effective date** | 2026-11-13 |
 | **Applies to** | Steps 1 to 5 of the project roadmap (see Section 9) |
 
@@ -78,6 +78,7 @@ A fuller glossary is in [docs/explainers](docs/explainers/README.md).
 | openFDA device recall API | <https://open.fda.gov/apis/device/recall/> |
 | Chroma vector database | <https://www.trychroma.com/> |
 | Plain-language walkthrough of each code file | [docs/explainers](docs/explainers/README.md) |
+| Codebase floor plan | [docs/floor-plan.svg](docs/floor-plan.svg) (static), [docs/floor-plan.html](docs/floor-plan.html) (interactive) |
 
 ## 6. System Description
 
@@ -113,7 +114,31 @@ Question ─┬─> embedding model ─> nearest chunks ─┐
 | **Agent** | Anthropic SDK tool runner | At most 10 rounds of tool calls; each call and a preview of its result is printed |
 | **Recalls** | openFDA device recall API | Fetched live; the four insulin pump product codes only |
 
-### 6.3 Prerequisites
+### 6.3 Codebase map
+
+The codebase drawn as a plant floor plan. Each room is one Python file, and its floor area is proportional to the file's line count (1 line = 150 square units). Rooms marked NTS (not to scale) are data stores, documents and outside services. Conveyors follow the actual imports; numbered badges give the order of travel on each route.
+
+![Floor plan of the MAUDE_RAG codebase](docs/floor-plan.svg)
+
+| Zone | Rooms | Role |
+|---|---|---|
+| Receiving and processing (yellow) | `ingest.py`, `index.py` | Download the reports and build both stores (steps 7.2 and 7.3) |
+| Storage (blue) | `data/reports.jsonl`, `data/chroma`, `data/reports.db`, `eval/` | Raw reports, the vector index, the counting database, and the test sets with their results |
+| Production cells (green) | `router.py`, `ask.py`, `keyword.py`, `sql.py`, `agent.py` | Answer questions: dispatch, search, counting and the agent |
+| Utilities (purple) | `config.py`, `llm.py` | Shared settings and the single connection to Claude |
+| Quality lab (pink) | `evaluate.py`, `evaluate_llm.py`, `tests/` | Measure the cells and check the building blocks |
+| Document control (grey) | `README.md`, `docs/` | This procedure and the explainers |
+
+| Line | Meaning |
+|---|---|
+| Solid, orange | Build: data moving into the stores |
+| Solid, green / blue / violet | The search, count and agent routes |
+| Dashed, magenta | An LLM call, made through `llm.py` |
+| Dotted, teal | A quality gauge measuring a cell |
+
+An LLM tag marks a room that calls Claude. An amber ring marks a room that is built and unit-tested but not yet run against the API. The interactive version, [docs/floor-plan.html](docs/floor-plan.html), highlights one route at a time and shows each room's inputs, outputs and command; download it and open it in a browser, since GitHub shows HTML files as source.
+
+### 6.4 Prerequisites
 
 | Item | Needed for |
 |---|---|
@@ -314,3 +339,4 @@ The `data` folder is excluded from version control and is rebuilt by repeating s
 | B | 2026-11-13 | Added metadata filters, BM25 keyword search and hybrid retrieval (roadmap step 2). Changed the download to sample every day of each month; Revision A took only the first day or two of each month. Repeat steps 7.2 and 7.3 after updating |
 | C | 2026-11-13 | Added the 20-question test set and the retrieval scorer (step 7.9), completing roadmap step 1's baseline. Results recorded in `eval/results/2026-11-13-1.md` (first draft of the test set) and `eval/results/2026-11-13-2.md` (six weak questions replaced) |
 | D | 2026-11-13 | Added the SQL path (step 3), the router (step 4) and the agent with live recall lookup (step 5), with steps 7.8 to 7.10 and 7.13. Steps 7.8 to 7.10 renumbered to 7.11, 7.12 and 7.14. The counting database is built in step 7.3; repeat it after updating. The LLM steps were built and unit-tested but not yet run against the API |
+| E | 2026-11-13 | Added the codebase floor plan (section 6.3; `docs/floor-plan.svg` and `docs/floor-plan.html`). Prerequisites renumbered to 6.4. No change to the procedure steps |

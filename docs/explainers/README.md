@@ -1,6 +1,6 @@
 # Plain-language explainers
 
-One explainer per code file. Read them in this order, which is the order the pipeline runs in.
+One explainer per code file. Read them in this order, which is the order the pipeline runs in. For a picture of how the files fit together, see the [codebase floor plan](../floor-plan.svg).
 
 | # | File | What it does in one line | Explainer |
 |---|---|---|---|
