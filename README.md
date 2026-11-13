@@ -34,6 +34,10 @@ python -m maude_rag.ask "What problems are reported with infusion sets?"
 
 Tests: `python -m pytest`
 
+## How the code works
+
+Each file has a plain-language walkthrough in [docs/explainers](docs/explainers/README.md).
+
 ## Reading the answers
 
 MAUDE is a passive reporting system. Reports are unverified, may be duplicated, and do not show that a device caused an event. Report counts are not incidence rates. Nothing here is medical advice.
