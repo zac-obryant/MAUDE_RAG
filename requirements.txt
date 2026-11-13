@@ -1,0 +1,7 @@
+# Install CPU-only PyTorch first to avoid a multi-GB GPU download:
+#   pip install --index-url https://download.pytorch.org/whl/cpu torch
+sentence-transformers>=6.3
+chromadb>=1.5
+anthropic>=2.8
+requests>=2.32
+pytest>=9.0
