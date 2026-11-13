@@ -1,4 +1,4 @@
-"""Step 1b: embed the narratives and store them in a vector database.
+"""Step 1b (updated in step 2): embed the narratives and store them in a vector database.
 
     python -m maude_rag.index
 
@@ -43,10 +43,12 @@ def main() -> None:
             metadatas.append(
                 {
                     "report_number": report["report_number"],
-                    "date_received": report["date_received"],
-                    "event_type": report["event_type"],
-                    "brand_name": report["brand_name"],
-                    "manufacturer": report["manufacturer"],
+                    # A number (20250314) so date ranges can be filtered with $gte/$lte.
+                    "date_received": int(report["date_received"] or 0),
+                    # Upper case so filters match however the user types them.
+                    "event_type": report["event_type"].upper(),
+                    "brand_name": report["brand_name"].upper(),
+                    "manufacturer": report["manufacturer"].upper(),
                     "product_code": report["product_code"],
                 }
             )

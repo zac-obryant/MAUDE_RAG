@@ -219,6 +219,169 @@ test: the prompt carries the report number and the question
 
 This confirms that the report number appears in the prompt, since the model cannot cite a number it was never shown, and that the question comes at the end.
 
+### 6. Step 2: filters and keyword search
+
+```python
+def test_no_filters_means_no_where_clause():
+    assert where_clause() is None
+
+def test_single_filter_is_not_wrapped():
+    assert where_clause(brands=["MINIMED 780G"]) == {"brand_name": {"$in": ["MINIMED 780G"]}}
+
+def test_several_filters_are_anded_with_a_date_range():
+    clause = where_clause(event_type="Death", since=20250601, until=20250630)
+    assert clause == {"$and": [
+        {"event_type": "DEATH"},
+        {"date_received": {"$gte": 20250601}},
+        {"date_received": {"$lte": 20250630}},
+    ]}
+
+def test_bm25_ranks_the_doc_with_the_rare_word_first():
+    docs = ["pump alarm sounded", "pump occlusion alarm", "pump battery died"]
+    scores = bm25("occlusion alarm", docs)
+    assert max(range(3), key=scores.__getitem__) == 1
+    assert scores[2] == 0
+
+def test_bm25_handles_an_empty_pool():
+    assert bm25("anything", []) == []
+
+def test_rrf_rewards_items_found_by_both_lists():
+    assert rrf(["a", "b", "c"], ["c", "d"])[0] == "c"
+```
+
+**In plain steps**
+
+```
+test: with no filters, there is no database condition at all
+test: one filter is handed back on its own, not wrapped in "all of these"
+test: several filters are wrapped in "all of these", and the event type is put in capitals
+
+test: of three made-up chunks, the one containing "occlusion" ranks first,
+      and the one sharing no words with the question scores 0
+test: scoring an empty pool gives an empty list instead of crashing
+
+test: when "c" is in both lists, it comes out on top after merging,
+      even though "a" was first in one list
+```
+
+**Key elements**
+
+| Code | What it means |
+|---|---|
+| `is None` | "Is this nothing?" |
+| `max(range(3), key=scores.__getitem__)` | The position (0, 1 or 2) with the highest score |
+| `[0]` after `rrf(...)` | The first item of the merged list |
+
+**Explanation**
+
+These pin down the rules from [ask.md](ask.md) step 3 and [keyword.md](keyword.md). The BM25 test shows the key idea in miniature: "pump" and "alarm" are common, "occlusion" is rare, so the chunk with "occlusion" wins.
+
+### 7. A month's download covers the whole month
+
+```python
+def test_month_is_spread_across_days_and_tops_up_short_days(monkeypatch):
+    from maude_rag import ingest
+
+    def fake_day(year, month, day, wanted):
+        if day % 7 in (0, 6):  # pretend weekends have no reports
+            return []
+        return [{"day": day}] * wanted
+
+    monkeypatch.setattr(ingest, "fetch_day", fake_day)
+    reports = ingest.fetch_month(2025, 6, 250)
+    days = {r["day"] for r in reports}
+    assert len(reports) == 250
+    assert min(days) == 1 and max(days) >= 28
+```
+
+**In plain steps**
+
+```
+test: a month's download covers the whole month
+    replace the real one-day download with a fake one that:
+        returns nothing on some days (pretend weekends)
+        returns exactly as many made-up reports as asked for on the others
+
+    reports = collect June 2025, asking for 250
+    days    = the days those reports came from
+
+    there must be exactly 250 reports
+    they must start on day 1 and reach at least day 28
+```
+
+**Key elements**
+
+| Code | What it means |
+|---|---|
+| `monkeypatch` | A pytest tool that swaps a function for a stand-in during one test, then puts the original back |
+| `monkeypatch.setattr(ingest, "fetch_day", fake_day)` | "While this test runs, `fetch_day` means `fake_day`", so no request goes to the FDA |
+| `day % 7 in (0, 6)` | `%` gives the remainder after dividing. This picks two days in every seven |
+| `[{"day": day}] * wanted` | A list of `wanted` copies of a tiny made-up report that records its day |
+| `{r["day"] for r in reports}` | The set of distinct days, with repeats removed |
+
+**Explanation**
+
+This guards the fix described in [ingest.md](ingest.md) step 4. It checks both halves: the sample reaches late in the month instead of stopping after a day or two, and days with no reports do not leave the month short of 250.
+
+### 8. Evaluation scoring
+
+```python
+def test_score_counts_hit_precision_and_rank():
+    s = score(["A", "B", "C", "D"], correct={"C", "D"}, judged={"A", "B", "C", "D"})
+    assert s == {"hit": True, "precision": 0.5, "reciprocal_rank": 1 / 3, "unjudged": 0}
+
+def test_score_with_nothing_correct():
+    s = score(["A", "B"], correct={"Z"})
+    assert s["hit"] is False and s["precision"] == 0 and s["reciprocal_rank"] == 0
+
+def test_score_flags_reports_nobody_has_read():
+    assert score(["A", "NEW"], correct={"A"}, judged={"A"})["unjudged"] == 1
+
+def test_filters_match_like_the_command_line():
+    report = {"event_type": "Death", "brand_name": "MINIMED 780G US", "manufacturer": "MEDTRONIC",
+              "date_received": "20250615"}
+    assert passes(report, {"event_type": "DEATH", "brand": "780g", "since": 20250601, "until": 20250630})
+    assert not passes(report, {"until": 20250531})
+    assert not passes(report, {"manufacturer": "tandem"})
+
+def test_pattern_questions_check_every_report_that_passes_the_filters():
+    reports = [ ...report R1 says "Pump error 35.", report R2 says "Pump error 350."... ]
+    question = {"judged_by": "pattern", "pattern": r"ERROR\s*35\b", "filters": {}}
+    assert correct_reports(question, reports) == ({"R1"}, None)
+
+def test_pattern_questions_can_exclude_false_matches():
+    reports = [ ...report R1 says "No occlusion was found."... ]
+    question = {"judged_by": "pattern", "pattern": "OCCLUSION", "filters": {}, "exclude": ["R1"]}
+    assert correct_reports(question, reports) == (set(), None)
+```
+
+**In plain steps**
+
+```
+test: four reports retrieved, the 3rd and 4th correct
+      -> a hit, half are correct, first correct at position 3 so reciprocal rank 1/3
+test: nothing correct retrieved -> no hit, all scores zero
+test: a retrieved report nobody has read is counted as unjudged
+
+test: a June death report for a 780G brand passes matching filters,
+      fails an end date in May, and fails a Tandem manufacturer filter
+
+test: the pattern "error 35" matches "error 35" but not "error 350"
+test: a report that matches the pattern but is on the exclude list does not count
+```
+
+**Key elements**
+
+| Code | What it means |
+|---|---|
+| `{"C", "D"}` | A set of report numbers |
+| `1 / 3` | One third, written as a division |
+| `r"ERROR\s*35\b"` | A pattern: "ERROR", optional spaces, "35", then a word boundary, so "350" does not match |
+
+**Explanation**
+
+These pin down the arithmetic in [evaluate.md](evaluate.md) steps 1 to 3, so a scoring mistake cannot quietly change the results. The last test guards against a classic pattern bug: without `\b`, "error 35" would also match "error 350".
+
 ## What is not tested
 
-These tests cover the pieces that are pure logic. They do not call the FDA, the embedding model, the database or the LLM, so they say nothing about whether search results or answers are any good. Measuring that needs a set of test questions with known good answers, which is a later step.
+These tests cover the pieces that are pure logic. They do not call the FDA, the embedding model, the database or the LLM (nor the `matching` helper, which reads the downloaded reports), so they say nothing about whether search results or answers are any good. Measuring that needs a set of test questions with known good answers, which is a later step.

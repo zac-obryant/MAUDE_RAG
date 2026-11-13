@@ -2,8 +2,8 @@
 
     python -m maude_rag.ingest --year 2025 --per-month 250
 
-Reports are spread evenly across the months of one year so the sample is not
-just the last few days of submissions. Output: data/reports.jsonl, one slimmed
+Reports are spread evenly across every day of one year, so the sample is not
+dominated by a few days' submissions. Output: data/reports.jsonl, one slimmed
 report per line.
 """
 
@@ -43,28 +43,40 @@ def slim(report: dict) -> dict | None:
     }
 
 
-def fetch_month(year: int, month: int, wanted: int) -> list[dict]:
-    last_day = calendar.monthrange(year, month)[1]
+def fetch_day(year: int, month: int, day: int, wanted: int) -> list[dict]:
+    """Up to `wanted` reports received on one day (fewer if the day has fewer)."""
+    if wanted <= 0:
+        return []
     codes = "+".join(PRODUCT_CODES)
-    search = (
-        f"device.device_report_product_code:({codes})"
-        f"+AND+date_received:[{year}{month:02d}01+TO+{year}{month:02d}{last_day}]"
+    date = f"{year}{month:02d}{day:02d}"
+    # Built by hand because openFDA needs literal "+" and "[ ]" in the query.
+    url = (
+        f"{API}?search=device.device_report_product_code:({codes})"
+        f"+AND+date_received:[{date}+TO+{date}]&limit={min(PAGE, wanted)}"
     )
+    response = requests.get(url, timeout=60)
+    time.sleep(0.3)  # stay well inside the unauthenticated rate limit
+    if response.status_code == 404:  # openFDA's way of saying "no results"
+        return []
+    response.raise_for_status()
+    return [r for r in map(slim, response.json()["results"]) if r][:wanted]
+
+
+def fetch_month(year: int, month: int, wanted: int) -> list[dict]:
+    """Spread `wanted` reports across every day of the month.
+
+    openFDA returns reports in date order, so taking the first 250 of a month
+    gives the first day or two only. Instead each day gets an even share, and a
+    day that falls short (a weekend, say) passes its unused share to the days after it.
+    """
+    days = calendar.monthrange(year, month)[1]
     kept: list[dict] = []
-    skip = 0
-    while len(kept) < wanted:
-        # Built by hand because openFDA needs literal "+" and "[ ]" in the query.
-        url = f"{API}?search={search}&limit={min(PAGE, wanted)}&skip={skip}"
-        response = requests.get(url, timeout=60)
-        if response.status_code == 404:  # openFDA's way of saying "no results"
-            break
-        response.raise_for_status()
-        results = response.json()["results"]
-        kept.extend(r for r in map(slim, results) if r)
-        if len(results) < min(PAGE, wanted):
-            break
-        skip += len(results)
-        time.sleep(0.3)  # stay well inside the unauthenticated rate limit
+    for day in range(1, days + 1):
+        days_left = days - day + 1
+        share = -(-(wanted - len(kept)) // days_left)  # round up
+        kept.extend(fetch_day(year, month, day, share))
+    # ponytail: within a day, openFDA's first N are still in its own order;
+    # randomise with skip offsets if same-day manufacturer batches skew results.
     return kept[:wanted]
 
 

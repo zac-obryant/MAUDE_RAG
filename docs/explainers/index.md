@@ -87,10 +87,10 @@ for report in reports:
         metadatas.append(
             {
                 "report_number": report["report_number"],
-                "date_received": report["date_received"],
-                "event_type": report["event_type"],
-                "brand_name": report["brand_name"],
-                "manufacturer": report["manufacturer"],
+                "date_received": int(report["date_received"] or 0),
+                "event_type": report["event_type"].upper(),
+                "brand_name": report["brand_name"].upper(),
+                "manufacturer": report["manufacturer"].upper(),
                 "product_code": report["product_code"],
             }
         )
@@ -133,7 +133,9 @@ The database wants three things for every chunk, supplied as three lists in the 
 
 - **an ID**: the report number plus the chunk's position, such as `2032227-2025-146042#0`. Every ID must be unique.
 - **the text** of the chunk.
-- **metadata**: facts about the report the chunk came from. These are stored next to the vector so that a search result can say which report, brand and date it belongs to.
+- **metadata**: facts about the report the chunk came from. These are stored next to the vector so that a search result can say which report, brand and date it belongs to, and, since step 2, so that searches can be filtered by them.
+
+Two adjustments were added in step 2 to make filtering work. The date is stored as a number (`int(...)` turns the text `"20250314"` into the number 20250314), because only numbers can be compared with "on or after"; `or 0` stands in for a missing date. Event type, brand and manufacturer are stored in capitals (`.upper()`), so a filter matches however it is typed.
 
 ### 3. Turn every chunk into a vector
 

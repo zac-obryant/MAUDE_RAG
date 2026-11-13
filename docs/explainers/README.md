@@ -7,8 +7,10 @@ One explainer per code file. Read them in this order, which is the order the pip
 | 1 | `maude_rag/config.py` | Holds the settings every other file shares | [config.md](config.md) |
 | 2 | `maude_rag/ingest.py` | Downloads the reports from the FDA | [ingest.md](ingest.md) |
 | 3 | `maude_rag/index.py` | Turns the reports into searchable vectors | [index.md](index.md) |
-| 4 | `maude_rag/ask.py` | Finds relevant reports and answers a question | [ask.md](ask.md) |
-| 5 | `tests/test_pipeline.py` | Checks the small building blocks still work | [tests.md](tests.md) |
+| 4 | `maude_rag/keyword.py` | Keyword search, and merging it with vector search (step 2) | [keyword.md](keyword.md) |
+| 5 | `maude_rag/ask.py` | Finds relevant reports and answers a question | [ask.md](ask.md) |
+| 6 | `maude_rag/evaluate.py` | Scores the search against a fixed set of test questions | [evaluate.md](evaluate.md) |
+| 7 | `tests/test_pipeline.py` | Checks the small building blocks still work | [tests.md](tests.md) |
 
 ```
 ingest.py            index.py                    ask.py
@@ -58,6 +60,8 @@ Indentation matters in Python. Lines pushed in to the right belong to the `for`,
 
 - **`requirements.txt`** lists the outside packages the project needs, so `pip install -r requirements.txt` installs them all at once.
 - **`.gitignore`** tells Git which files to leave out of the repository: the downloaded data, the virtual environment, and any file holding secret keys.
+- **`eval/questions.json`** holds the test questions and which reports count as correct answers. It is described in [evaluate.md](evaluate.md).
+- **`eval/results/`** holds a dated record of each evaluation run.
 - **`maude_rag/__init__.py`** is empty. Its presence tells Python that the `maude_rag` folder is a package, which is what makes `python -m maude_rag.ingest` work.
 
 ## Words used throughout
@@ -71,3 +75,8 @@ Indentation matters in Python. Lines pushed in to the right belong to the `for`,
 | **Vector database** | A store that can quickly find the vectors closest to a given vector |
 | **LLM** | Large language model: the program that writes the final answer (here, Claude) |
 | **RAG** | Retrieval-augmented generation: look up relevant text first, then have the LLM answer from it |
+| **Keyword search** / **BM25** | Search by exact shared words, giving rare words more weight |
+| **Hybrid search** | Running vector and keyword search together and merging the results |
+| **Metadata filter** | A condition on report facts (event type, brand, date) applied before ranking |
+| **Test set** | A fixed list of questions with known correct reports, used to score the search |
+| **Hit rate**, **precision**, **MRR** | The three scores: did search find anything correct, what share was correct, and how high the first correct report ranked |

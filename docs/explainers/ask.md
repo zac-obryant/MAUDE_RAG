@@ -2,7 +2,9 @@
 
 ## Purpose
 
-This file answers a question. It finds the report chunks whose meaning is closest to the question, hands them to an LLM, and asks it to write an answer based only on those chunks, citing the report numbers it used.
+This file answers a question. It finds the report chunks most relevant to the question, hands them to an LLM, and asks it to write an answer based only on those chunks, citing the report numbers it used.
+
+Since step 2 it finds chunks two ways, by meaning (vector search) and by exact words (keyword search, see [keyword.md](keyword.md)), and merges the results. Optional filters narrow the search to certain reports first, such as deaths only, or one brand, or one month.
 
 This is the "retrieve, then generate" part that gives RAG its name, and the third step of the pipeline.
 
@@ -12,6 +14,16 @@ python -m maude_rag.ask --retrieve-only "pump screen went blank"
 
 # Search and answer: needs ANTHROPIC_API_KEY to be set
 python -m maude_rag.ask "What problems are reported with infusion sets?"
+
+# Filtered: only death reports received from June 2025 onward
+python -m maude_rag.ask --retrieve-only --event-type Death --since 20250601 "occlusion"
+
+# Compare search methods on the same question
+python -m maude_rag.ask --retrieve-only --mode vector  "E-03 error"
+python -m maude_rag.ask --retrieve-only --mode keyword "E-03 error"
+
+# See which brand names the --brand filter accepts
+python -m maude_rag.ask --values brand_name
 ```
 
 ## Dependencies
@@ -19,11 +31,13 @@ python -m maude_rag.ask "What problems are reported with infusion sets?"
 | Dependency | Where it comes from | Why it is needed |
 |---|---|---|
 | `argparse` | Built into Python | Reads the question and options from the command line |
+| `json`, `collections.Counter` | Built into Python | Read the downloaded reports and count values for `--values` |
 | `functools.cache` | Built into Python | Remembers a result so slow work is done only once |
 | `chromadb` | Installed package | Opens the vector database built by `index.py` |
 | `sentence_transformers` | Installed package | Turns the question into a vector |
 | `anthropic` | Installed package | Sends the prompt to Claude and receives the answer |
 | `config.py` | This project | Supplies model names, database location and the number of chunks to retrieve |
+| `keyword.py` | This project | Keyword search and the rule that merges result lists |
 
 It also needs the database in `data/chroma`, so `index.py` must have been run first. The answering step needs an Anthropic API key in the `ANTHROPIC_API_KEY` environment variable; the search step does not.
 
@@ -112,64 +126,180 @@ to get the collection:
 
 Loading the embedding model takes a few seconds. `@cache` makes each function do its work the first time it is called and hand back the saved result every time after. Asking many questions in one run therefore loads the model only once.
 
-### 3. Find the closest chunks (`retrieve`)
+### 3. Turn the filters into a database condition (`where_clause`, `matching`, `filters_to_where`)
+
+#### 3a. Build the condition (`where_clause`)
 
 ```python
-def retrieve(question, k=TOP_K):
-    vector = _embedder().encode([question], normalize_embeddings=True)
-    hits = _collection().query(query_embeddings=vector.tolist(), n_results=k)
-    return [
-        {"text": text, "similarity": 1 - distance, **metadata}
-        for text, distance, metadata in zip(
-            hits["documents"][0], hits["distances"][0], hits["metadatas"][0]
-        )
-    ]
+def where_clause(event_type=None, brands=None, manufacturers=None, since=None, until=None):
+    conditions = []
+    if event_type:
+        conditions.append({"event_type": event_type.upper()})
+    if brands is not None:
+        conditions.append({"brand_name": {"$in": brands}})
+    if manufacturers is not None:
+        conditions.append({"manufacturer": {"$in": manufacturers}})
+    if since:
+        conditions.append({"date_received": {"$gte": since}})
+    if until:
+        conditions.append({"date_received": {"$lte": until}})
+    if len(conditions) > 1:
+        return {"$and": conditions}
+    return conditions[0] if conditions else None
 ```
 
 **In plain steps**
 
 ```
-to retrieve for a question (asking for 8 results unless told otherwise):
-    vector = turn the question into a list of numbers, using the embedding model
-    hits   = ask the database for the 8 stored chunks closest to that vector
+to build the condition from whichever filters were given:
+    start an empty list of conditions
+    if an event type was given:     add "event type must equal it" (in capitals)
+    if a list of brands was given:  add "brand must be one of these"
+    if a list of manufacturers was given: add "manufacturer must be one of these"
+    if a start date was given:      add "date received must be on or after it"
+    if an end date was given:       add "date received must be on or before it"
 
-    the database answers with three lists: texts, distances, metadata
-
-    for each result (taking one text, one distance, one metadata record together):
-        build a record holding:
-            the chunk's text
-            similarity = 1 - distance
-            every field from the metadata (report number, brand, date, ...)
-
-    hand back the list of those records
+    if there are several conditions: hand back "all of these must hold"
+    if there is one: hand back just that one
+    if there are none: hand back nothing (no filter)
 ```
 
 **Key elements**
 
 | Code | What it means |
 |---|---|
-| `_embedder()` | Get the embedding model from step 2 |
-| `.encode([question], ...)` | Turn the question into a vector. The square brackets wrap the single question in a list, because the model expects a list of texts |
-| `_collection()` | Get the database collection from step 2 |
-| `.query(...)` | Ask the collection to search |
-| `query_embeddings=vector.tolist()` | "Here is the vector to search with", converted to an ordinary list |
-| `n_results=k` | "Send back this many matches" |
-| `hits["documents"]` | The part of the answer holding the matching texts |
-| `[0]` after it | The results for the first question. The database can search for several questions at once, so it answers with one list per question; we asked only one |
-| `zip(a, b, c)` | Walk through three lists side by side, taking the first of each together, then the second of each, and so on |
-| `for text, distance, metadata in ...` | Name the three items taken at each step |
-| `1 - distance` | Turn distance into similarity. A distance of 0.24 becomes a similarity of 0.76 |
-| `**metadata` | "Copy every field of the metadata record into this one", instead of writing each field out |
+| `event_type=None` | An optional input. If it is not given, it is `None`, and `if event_type:` skips it |
+| `.append(...)` | Add an item to the end of a list |
+| `{"event_type": "DEATH"}` | The database's way of writing "event_type equals DEATH" |
+| `{"$in": [...]}` | "Is one of these values" |
+| `"$gte"`, `"$lte"` | "Greater than or equal to" and "less than or equal to" |
+| `{"$and": [...]}` | "Every condition in this list must hold." The database requires this wrapper when there is more than one |
 
 **Explanation**
 
-1. Turn the question into a vector using the **same** embedding model that was used on the reports. This matters: vectors from different models cannot be compared.
-2. Ask the database for the `k` stored vectors nearest to it (8 by default).
-3. The database returns three parallel lists: texts, distances and metadata. `zip` walks through them together, and each result is tidied into one record.
+The database stores each chunk with its report's metadata (see [index.md](index.md)), so it can skip non-matching chunks before ranking anything. This is called *pre-filtering*. It matters because filtering *after* search would leave fewer than eight results, or none, when the filter is strict.
 
-The database reports *distance*, where 0 means identical. `1 - distance` flips that into *similarity*, where 1 means identical, which is easier to read. In practice a good match here scores about 0.70 to 0.80.
+Dates are written as numbers, such as `20250601`, which is why `index.py` stores them as numbers: only numbers can be compared with "on or after".
 
-### 4. Assemble the prompt (`build_prompt`)
+#### 3b. Expand partial names (`matching`, `filters_to_where`)
+
+```python
+def matching(field, text):
+    return sorted({v for v, _ in values(field, top=None) if text.upper() in v})
+
+
+def filters_to_where(event_type=None, brand=None, manufacturer=None, since=None, until=None):
+    brands = matching("brand_name", brand) if brand else None
+    manufacturers = matching("manufacturer", manufacturer) if manufacturer else None
+    if brands == [] or manufacturers == []:
+        raise LookupError("No brand or manufacturer contains that text. ...")
+    return where_clause(event_type, brands, manufacturers, since, until)
+```
+
+**In plain steps**
+
+```
+to find the full names matching some typed text:
+    go through every distinct value of the field in the downloaded reports
+    keep those that contain the text (ignoring capitals), in alphabetical order
+
+to turn the typed filters into a database condition:
+    if a brand was typed: brands = every full brand name containing it
+    if a manufacturer was typed: manufacturers = every full name containing it
+    if either list came out empty: stop with a message saying so
+    build the condition with where_clause (step 3a)
+```
+
+**Key elements**
+
+| Code | What it means |
+|---|---|
+| `{v for v, _ in ...}` | Collect the values into a set. `_` is a name for a part that is not needed (here, the count) |
+| `top=None` | Ask `values` for every value, not just the 25 most common |
+| `raise LookupError(...)` | Stop and report a problem. Whoever called the function decides what to do with it |
+
+**Explanation**
+
+Brand and manufacturer names in MAUDE are long and inconsistent, and the database can only match whole values. Typing `--brand 780g` matches nine stored brand names, from `MINIMED 780G US SYSTEM BLE CONNECT 3.0 MG/DL` to `PUMP MMT-1884L MM780G BLE 3.0 MG/ML`, and `--manufacturer "beta bionics"` matches four spellings of the same company. `filters_to_where` is used by both `main` and the evaluation script ([evaluate.md](evaluate.md)), so filters behave the same everywhere.
+
+### 4. Find the best chunks (`retrieve`)
+
+```python
+def retrieve(question, k=TOP_K, where=None, mode="hybrid"):
+    found = {}
+    rankings = []
+
+    if mode in ("vector", "hybrid"):
+        vector = _embedder().encode([question], normalize_embeddings=True)
+        hits = _collection().query(query_embeddings=vector.tolist(), n_results=k, where=where)
+        for id_, text, distance, metadata in zip(
+            hits["ids"][0], hits["documents"][0], hits["distances"][0], hits["metadatas"][0]
+        ):
+            found[id_] = {"text": text, "similarity": 1 - distance, "found_by": "vector", **metadata}
+        rankings.append(hits["ids"][0])
+
+    if mode in ("keyword", "hybrid"):
+        pool = _collection().get(where=where, include=["documents", "metadatas"])
+        scores = bm25(question, pool["documents"])
+        top = [i for i in sorted(range(len(scores)), key=scores.__getitem__, reverse=True)[:k] if scores[i] > 0]
+        for i in top:
+            id_ = pool["ids"][i]
+            if id_ in found:
+                found[id_]["found_by"] = "both"
+            else:
+                found[id_] = {"text": pool["documents"][i], "similarity": None, "found_by": "keyword",
+                              **pool["metadatas"][i]}
+        rankings.append([pool["ids"][i] for i in top])
+
+    return [found[id_] for id_ in rrf(*rankings)[:k]]
+```
+
+**In plain steps**
+
+```
+to retrieve for a question (8 results, no filter, both searches, unless told otherwise):
+    found    = an empty record of every chunk either search turns up
+    rankings = an empty list of ranked results
+
+    if vector search is on:
+        turn the question into a vector
+        ask the database for the 8 closest chunks that pass the filter
+        for each result: record its text, similarity, metadata, and "found by vector"
+        keep the order as one ranking
+
+    if keyword search is on:
+        pool = every chunk that passes the filter
+        score every chunk in the pool with BM25
+        top  = the 8 highest-scoring chunks, dropping any that scored 0
+        for each of them:
+            if vector search already found it: mark it "found by both"
+            otherwise: record it, marked "found by keyword"
+        keep the order as another ranking
+
+    merge the rankings and hand back the top 8 records
+```
+
+**Key elements**
+
+| Code | What it means |
+|---|---|
+| `mode in ("vector", "hybrid")` | "Is the mode one of these two?" |
+| `where=where` | Pass the filter from step 3 to the database |
+| `hits["ids"]` | Each chunk's unique label, such as `2032227-2025-146042#0`. It is how the same chunk is recognised in both result lists |
+| `_collection().get(...)` | Fetch chunks without ranking them; here, every chunk that passes the filter |
+| `sorted(range(len(scores)), key=scores.__getitem__, reverse=True)` | List the chunk positions from highest score to lowest |
+| `[:k]` | Keep the first 8 |
+| `if scores[i] > 0` | Drop chunks that share no words with the question |
+| `"similarity": None` | Keyword-only hits have no similarity score, because vector search did not look at them |
+| `rrf(*rankings)` | Merge the rankings (see [keyword.md](keyword.md)) |
+
+**Explanation**
+
+Step 1 used vector search alone. It finds chunks with similar meaning, but it handles exact terms such as error codes and model numbers loosely. Keyword search is the reverse: precise on exact words, blind to synonyms. Running both and merging them, called *hybrid search*, covers both weaknesses.
+
+`--mode vector` reproduces step 1 exactly, so the two can be compared on the same question. The `found_by` label printed next to each result shows which search contributed it.
+
+### 5. Assemble the prompt (`build_prompt`)
 
 ```python
 def build_prompt(question, hits):
@@ -229,7 +359,7 @@ Question: Why do pump screens go blank?
 
 The tags make it unambiguous where one report ends and the next begins, and they put the report number right beside the text so the model can cite it.
 
-### 5. Ask the LLM (`answer`)
+### 6. Ask the LLM (`answer`)
 
 ```python
 def answer(question, hits):
@@ -260,7 +390,7 @@ to answer a question using the retrieved chunks:
         which model to use
         the longest reply allowed
         the standing instructions from step 1
-        one message from the "user": the prompt built in step 4
+        one message from the "user": the prompt built in step 5
         a request to retry on another model if this one declines
 
     if the model declined to answer:
@@ -284,7 +414,7 @@ to answer a question using the retrieved chunks:
 | `system=SYSTEM` | The standing instructions from step 1 |
 | `messages=[{...}]` | The conversation so far, as a list. Here it holds one message |
 | `"role": "user"` | Who the message is from. `user` means the person asking |
-| `"content": build_prompt(...)` | What the message says: the prompt built in step 4 |
+| `"content": build_prompt(...)` | What the message says: the prompt built in step 5 |
 | `betas=[...]`, `fallbacks="default"` | Switch on the optional retry-on-another-model feature |
 | `response.stop_reason` | Why the model stopped writing. `"refusal"` means it declined |
 | `response.content` | The reply, delivered as a list of blocks |
@@ -300,18 +430,42 @@ to answer a question using the retrieved chunks:
 - If it is still declined, a plain message is returned instead of an empty answer.
 - A reply arrives as a list of blocks, not all of which are text. The last line keeps the text blocks and joins them into the final answer.
 
-### 6. Tie it together (`main`)
+### 7. Tie it together (`main`)
 
 ```python
-parser.add_argument("question")
+parser.add_argument("question", nargs="?")
 parser.add_argument("-k", type=int, default=TOP_K, help="number of chunks to retrieve")
 parser.add_argument("--retrieve-only", action="store_true", help="skip the LLM step")
+parser.add_argument("--mode", choices=["hybrid", "vector", "keyword"], default="hybrid")
+filters = parser.add_argument_group("filters")
+filters.add_argument("--event-type", help="e.g. Malfunction, Injury, Death")
+filters.add_argument("--brand", help="any part of a brand name, e.g. 780g (see --values brand_name)")
+filters.add_argument("--manufacturer", help="any part of a manufacturer name (see --values manufacturer)")
+filters.add_argument("--since", type=int, metavar="YYYYMMDD", help="received on or after")
+filters.add_argument("--until", type=int, metavar="YYYYMMDD", help="received on or before")
+parser.add_argument("--values", metavar="FIELD", help="list common values of a field and exit")
 args = parser.parse_args()
 
-hits = retrieve(args.question, args.k)
+if args.values:
+    for value, count in values(args.values):
+        print(f"{count:6d}  {value}")
+    return
+if not args.question:
+    parser.error("a question is required")
+
+try:
+    where = filters_to_where(args.event_type, args.brand, args.manufacturer, args.since, args.until)
+except LookupError as e:
+    print(e)
+    return
+hits = retrieve(args.question, args.k, where, args.mode)
+if not hits:
+    print("No matching reports. Loosen the filters or check spellings with --values.")
+    return
 print("Retrieved:")
 for h in hits:
-    print(f"  {h['similarity']:.2f}  {h['report_number']}  {h['brand_name']}: {h['text'][:90]}...")
+    score = f"{h['similarity']:.2f}" if h["similarity"] is not None else "  - "
+    print(f"  {score}  {h['found_by']:<7}  {h['report_number']}  {h['brand_name']}: {h['text'][:80]}...")
 if not args.retrieve_only:
     print("\n" + answer(args.question, hits))
 ```
@@ -319,16 +473,24 @@ if not args.retrieve_only:
 **In plain steps**
 
 ```
-expect a question to be typed on the command line
-accept an optional -k number             (use 8 if not given)
-accept an optional --retrieve-only switch (off unless typed)
+accept a question (optional, because --values does not need one)
+accept -k, --retrieve-only, --mode, and the five filter options
+accept --values FIELD
 read what was actually typed
 
-hits = retrieve the closest chunks for the question
+if --values was typed:
+    show the most common values of that field, with counts, and stop
+if no question was typed:
+    stop with an error
+
+build the filter condition (step 3b); if a name matches nothing, say so and stop
+hits = retrieve the best chunks (step 4)
+if nothing matched: say so and stop
 
 show the heading "Retrieved:"
 for each chunk:
-    show its similarity score, report number, brand, and first 90 characters
+    show its similarity (or "-" if keyword search alone found it),
+    which search found it, its report number, brand, and first 80 characters
 
 if --retrieve-only was not typed:
     ask the LLM for an answer and show it
@@ -338,25 +500,22 @@ if --retrieve-only was not typed:
 
 | Code | What it means |
 |---|---|
-| `parser.add_argument("question")` | Expect one piece of text with no dashes in front: the question itself. It is required |
-| `"-k"`, `"--retrieve-only"` | Options. A name starting with dashes is optional |
-| `type=int` | The value must be a whole number |
-| `default=TOP_K` | Use the setting from `config.py` when `-k` is not given |
-| `help="..."` | The description shown when someone runs the program with `--help` |
-| `action="store_true"` | This option is a switch. Typing it turns it on; it takes no value |
-| `parser.parse_args()` | Read what was typed and store the results in `args` |
-| `args.question`, `args.k` | The values that were typed |
-| `{h['similarity']:.2f}` | A blank with a format: show the number with two decimal places, such as `0.76` |
-| `h['text'][:90]` | A slice: the first 90 characters of the chunk's text |
-| `if not args.retrieve_only:` | "If the switch is off" |
-| `"\n" + answer(...)` | A blank line, followed by the answer from step 5 |
+| `nargs="?"` | The question may be left out. It is then `None` |
+| `choices=[...]` | Only these values are accepted for `--mode` |
+| `add_argument_group("filters")` | Groups the filter options under their own heading in `--help` |
+| `metavar="YYYYMMDD"` | How the expected value is shown in `--help` |
+| `values(field)` | Counts each value of a field across the downloaded reports, most common first |
+| `parser.error(...)` | Stop and print a usage message |
+| `try:` ... `except LookupError as e:` | Attempt the indented lines; if they report a `LookupError`, print its message instead of crashing |
+| `{h['found_by']:<7}` | Show the label padded to 7 characters, so the columns line up |
 
 **Explanation**
 
-It reads the question and options, retrieves the chunks, and prints each one's similarity score, report number, brand and first 90 characters. Seeing what was retrieved is the quickest way to tell whether a bad answer came from bad search or bad writing. Unless `--retrieve-only` was given, it then prints the LLM's answer.
+The filters exist because many questions are really about a subset: "what do *death* reports say about occlusions", or "what was reported about *this brand* in *June*". `--values` lists the stored names with their report counts, which helps when choosing what to type for `--brand` or `--manufacturer`.
 
 ## What to keep in mind
 
 - The answer can only be as good as the eight chunks retrieved. If the right reports are not found, the model cannot use them.
-- Search here is by meaning alone. A question about insulin *leaking* can return reports about insulin *not coming out*, because the wording is similar. Exact terms such as model numbers are also matched loosely. Step 2 of the roadmap addresses this.
+- Vector search alone can confuse similar wording: a question about insulin *leaking* can return reports about insulin *not coming out*. Keyword search helps with exact terms, but only matches identical words. Neither is perfect, which is why `found_by` is shown.
+- Brand and manufacturer filters match any part of the name, but not misspellings. A misspelt name returns nothing rather than a near match; use `--values` to check.
 - Questions that need counting ("how many...") cannot be answered correctly from eight excerpts.
