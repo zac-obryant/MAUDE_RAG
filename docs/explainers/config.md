@@ -162,3 +162,38 @@ TOP_K        = 8   (how many report excerpts to show the model per question)
 
 - `ANSWER_MODEL` is the LLM that writes the final answer.
 - `TOP_K` is how many chunks are retrieved and shown to that model for each question. Too few and it may miss relevant reports; too many and irrelevant ones crowd the prompt.
+
+Since step 3, `ANSWER_MODEL` is the model for every LLM call in the project: answering, writing SQL, routing and the agent. See [llm.md](llm.md).
+
+### 6. Settings for counting and the agent (steps 3 and 5)
+
+```python
+DB_PATH = DATA_DIR / "reports.db"
+MAX_SQL_ROWS = 200  # rows shown to the LLM; more than this is cut off and flagged
+
+RECALL_API = "https://api.fda.gov/device/recall.json"
+AGENT_MAX_STEPS = 10  # rounds of tool calls (one round can hold several calls) before it must answer
+```
+
+**In plain steps**
+
+```
+DB_PATH         = the SQLite database file, inside the data folder
+MAX_SQL_ROWS    = 200   (the most query result rows passed on)
+RECALL_API      = the openFDA web address for device recalls
+AGENT_MAX_STEPS = 10    (the most rounds of tool calls the agent may make; one round can hold several calls)
+```
+
+**Key elements**
+
+| Code | What it means |
+|---|---|
+| `DATA_DIR / "reports.db"` | Join a folder and a file name into a full path |
+| `"https://..."` | A web address, kept as text |
+
+**Explanation**
+
+- `DB_PATH` is where step 3 keeps a copy of the reports as a database table, for counting questions ([sql.md](sql.md)).
+- `MAX_SQL_ROWS` stops a query that lists thousands of rows from flooding the LLM's prompt. Results longer than this are cut off and marked as cut off.
+- `RECALL_API` is used by the step 5 agent to look up FDA recalls ([agent.md](agent.md)).
+- `AGENT_MAX_STEPS` puts a ceiling on how long the agent can keep calling tools, which bounds both time and cost.

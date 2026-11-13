@@ -1,8 +1,8 @@
-# `tests/test_pipeline.py`
+# `tests/test_pipeline.py` and `tests/test_steps_3_to_5.py`
 
 ## Purpose
 
-This file checks that the small building blocks of the pipeline behave as intended. Each test feeds a function a tiny made-up input and confirms the output is what it should be.
+These files check that the small building blocks of the pipeline behave as intended. Each test feeds a function a tiny made-up input and confirms the output is what it should be.
 
 Tests exist so that a later change which accidentally breaks something is caught straight away. Run them with:
 
@@ -20,6 +20,7 @@ They finish in a few seconds, need no internet connection and no API key, and do
 | `chunk` from `index.py` | This project | The function under test |
 | `slim` from `ingest.py` | This project | The function under test |
 | `build_prompt` from `ask.py` | This project | The function under test |
+| Functions from `sql.py`, `router.py`, `agent.py`, `llm.py`, `evaluate_llm.py` | This project | Tested in `tests/test_steps_3_to_5.py` (section 9) |
 
 Every test relies on `assert`, which means "this must be true". If it is not, the test fails and pytest shows what went wrong.
 
@@ -382,6 +383,55 @@ test: a report that matches the pattern but is on the exclude list does not coun
 
 These pin down the arithmetic in [evaluate.md](evaluate.md) steps 1 to 3, so a scoring mistake cannot quietly change the results. The last test guards against a classic pattern bug: without `\b`, "error 35" would also match "error 350".
 
+### 9. Steps 3 to 5 (`tests/test_steps_3_to_5.py`)
+
+These tests cover the SQL path, the router, the agent's recall lookup and the shared LLM helper, without calling Claude or the internet. Where code would call Claude, the test swaps in a stand-in that returns a fixed reply.
+
+```python
+@pytest.mark.parametrize("sql", [
+    "DELETE FROM reports",
+    "WITH x AS (SELECT 1) DELETE FROM reports",
+    "SELECT 1; DROP TABLE reports",
+])
+def test_queries_cannot_change_the_database(db, sql):
+    with pytest.raises((ValueError, sqlite3.Error)):
+        run_sql(sql, db)
+    assert run_sql("SELECT COUNT(*) FROM reports", db)["rows"] == [(2,)]
+```
+
+**In plain steps**
+
+```
+build a tiny database with two made-up reports              (the "db" fixture)
+
+test: the database stores the month and puts names in capitals
+test: a problem listed twice for one report is stored once
+test: three attempts to change the database all fail,      (the example above)
+      and both reports are still there afterwards
+test: a result longer than the row limit is cut off and marked as cut off
+test: query results count as the same despite row order, capitals, 3 vs 3.0,
+      or an extra label column, but not with a different number or an extra row
+test: the recall address covers all four insulin pump codes, the firm, and newest-first order
+test: the router drops filters the question did not state
+test: a JSON reply from the LLM is turned into a record
+test: a declined request raises an error instead of returning an empty answer
+```
+
+**Key elements**
+
+| Code | What it means |
+|---|---|
+| `@pytest.fixture` | A helper that prepares something several tests need, here a fresh tiny database |
+| `tmp_path` | A temporary folder pytest provides and cleans up, so tests never touch `data/` |
+| `@pytest.mark.parametrize("sql", [...])` | Run the same test once for each value in the list |
+| `pytest.raises((ValueError, sqlite3.Error))` | "The indented line must fail with one of these errors" |
+| `monkeypatch.setattr(...)` | Swap a setting or function for a stand-in during one test only |
+| `SimpleNamespace(...)` | A quick made-up object with named fields, used to imitate a reply from Claude |
+
+**Explanation**
+
+The most important test here is the one shown. In step 3 the LLM writes the SQL, so the query cannot be trusted. Three independent guards protect the data: only queries starting with `SELECT` or `WITH` are accepted, the database is opened read-only, and SQLite refuses two statements in one go. The test tries a plain delete, a delete disguised behind `WITH`, and a delete hidden after a harmless query, and checks the data is unchanged each time.
+
 ## What is not tested
 
-These tests cover the pieces that are pure logic. They do not call the FDA, the embedding model, the database or the LLM (nor the `matching` helper, which reads the downloaded reports), so they say nothing about whether search results or answers are any good. Measuring that needs a set of test questions with known good answers, which is a later step.
+These tests cover the pieces that are pure logic. They do not call the FDA, the embedding model, the real database or the LLM (nor the `matching` helper, which reads the downloaded reports), so they say nothing about whether search results or answers are any good. Answer quality is measured separately by `evaluate.py` and `evaluate_llm.py`. Measuring that needs a set of test questions with known good answers, which is a later step.

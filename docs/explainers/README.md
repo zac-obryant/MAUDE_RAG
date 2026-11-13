@@ -8,14 +8,24 @@ One explainer per code file. Read them in this order, which is the order the pip
 | 2 | `maude_rag/ingest.py` | Downloads the reports from the FDA | [ingest.md](ingest.md) |
 | 3 | `maude_rag/index.py` | Turns the reports into searchable vectors | [index.md](index.md) |
 | 4 | `maude_rag/keyword.py` | Keyword search, and merging it with vector search (step 2) | [keyword.md](keyword.md) |
-| 5 | `maude_rag/ask.py` | Finds relevant reports and answers a question | [ask.md](ask.md) |
-| 6 | `maude_rag/evaluate.py` | Scores the search against a fixed set of test questions | [evaluate.md](evaluate.md) |
-| 7 | `tests/test_pipeline.py` | Checks the small building blocks still work | [tests.md](tests.md) |
+| 5 | `maude_rag/llm.py` | The one place the project calls Claude | [llm.md](llm.md) |
+| 6 | `maude_rag/ask.py` | Finds relevant reports and answers a question | [ask.md](ask.md) |
+| 7 | `maude_rag/sql.py` | Answers counting questions with an LLM-written database query (step 3) | [sql.md](sql.md) |
+| 8 | `maude_rag/agent.py` | Answers multi-step questions by calling tools, including FDA recalls (step 5) | [agent.md](agent.md) |
+| 9 | `maude_rag/router.py` | Decides which of the above should answer a question (step 4) | [router.md](router.md) |
+| 10 | `maude_rag/evaluate.py` | Scores the search against a fixed set of test questions | [evaluate.md](evaluate.md) |
+| 11 | `maude_rag/evaluate_llm.py` | Scores the SQL path and the router | [evaluate_llm.md](evaluate_llm.md) |
+| 12 | `tests/` | Checks the small building blocks still work | [tests.md](tests.md) |
 
 ```
-ingest.py            index.py                    ask.py
-FDA website ──> data/reports.jsonl ──> data/chroma ──> answer with citations
-                        (config.py supplies the settings to all three)
+ingest.py            index.py
+FDA website ──> data/reports.jsonl ──> data/chroma    (for search)
+                                   └─> data/reports.db (for counting)
+
+                          ┌─ search ─> ask.py ─> answer quoting reports
+question ─> router.py ────┼─ sql ────> sql.py ─> answer with counts
+                          └─ agent ──> agent.py ─> uses search, SQL and FDA recalls
+                        (config.py supplies the settings; llm.py makes every call to Claude)
 ```
 
 ## How each step is laid out
@@ -61,6 +71,7 @@ Indentation matters in Python. Lines pushed in to the right belong to the `for`,
 - **`requirements.txt`** lists the outside packages the project needs, so `pip install -r requirements.txt` installs them all at once.
 - **`.gitignore`** tells Git which files to leave out of the repository: the downloaded data, the virtual environment, and any file holding secret keys.
 - **`eval/questions.json`** holds the test questions and which reports count as correct answers. It is described in [evaluate.md](evaluate.md).
+- **`eval/counting.json`** and **`eval/routing.json`** hold the test questions for the SQL path and the router, described in [evaluate_llm.md](evaluate_llm.md).
 - **`eval/results/`** holds a dated record of each evaluation run.
 - **`maude_rag/__init__.py`** is empty. Its presence tells Python that the `maude_rag` folder is a package, which is what makes `python -m maude_rag.ingest` work.
 
@@ -79,4 +90,8 @@ Indentation matters in Python. Lines pushed in to the right belong to the `for`,
 | **Hybrid search** | Running vector and keyword search together and merging the results |
 | **Metadata filter** | A condition on report facts (event type, brand, date) applied before ranking |
 | **Test set** | A fixed list of questions with known correct reports, used to score the search |
+| **SQL** | The standard language for asking a database questions, such as "count the reports per manufacturer" |
+| **Router** | The step that decides which method should answer a question |
+| **Agent** | An LLM that decides for itself which tools to call, in what order, and when it has enough to answer |
+| **Tool** | A function the LLM may ask the program to run, such as "search the reports" or "look up recalls" |
 | **Hit rate**, **precision**, **MRR** | The three scores: did search find anything correct, what share was correct, and how high the first correct report ranked |

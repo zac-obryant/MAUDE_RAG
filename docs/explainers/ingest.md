@@ -353,3 +353,4 @@ For each of the twelve months it downloads the reports, drops any whose report n
 - Running it again overwrites `data/reports.jsonl`.
 - Within a day, the reports are whichever ones openFDA returns first, not a random sample. Spreading across days removes most of that bias, but not all.
 - The download makes one request per day, about 365 in all, and takes a few minutes.
+- A day with no reports passes its share to later days, but the last days of a month have no later days. If they are empty, the month falls short: August 2025 ended on a weekend with no reports and has 234 instead of 250.

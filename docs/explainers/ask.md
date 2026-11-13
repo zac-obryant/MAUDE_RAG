@@ -35,7 +35,7 @@ python -m maude_rag.ask --values brand_name
 | `functools.cache` | Built into Python | Remembers a result so slow work is done only once |
 | `chromadb` | Installed package | Opens the vector database built by `index.py` |
 | `sentence_transformers` | Installed package | Turns the question into a vector |
-| `anthropic` | Installed package | Sends the prompt to Claude and receives the answer |
+| `llm.py` | This project | Sends the prompt to Claude and receives the answer (see [llm.md](llm.md)) |
 | `config.py` | This project | Supplies model names, database location and the number of chunks to retrieve |
 | `keyword.py` | This project | Keyword search and the rule that merges result lists |
 
@@ -363,72 +363,34 @@ The tags make it unambiguous where one report ends and the next begins, and they
 
 ```python
 def answer(question, hits):
-    import anthropic
-
-    client = anthropic.Anthropic()  # reads ANTHROPIC_API_KEY from the environment
-    response = client.beta.messages.create(
-        model=ANSWER_MODEL,
-        max_tokens=16000,
-        system=SYSTEM,
-        messages=[{"role": "user", "content": build_prompt(question, hits)}],
-        betas=["server-side-fallback-2026-07-01"],
-        fallbacks="default",
-    )
-    if response.stop_reason == "refusal":
-        return "The model declined to answer this question."
-    return "".join(block.text for block in response.content if block.type == "text")
+    try:
+        return ask_claude(SYSTEM, build_prompt(question, hits))
+    except Declined as e:
+        return str(e)
 ```
 
 **In plain steps**
 
 ```
 to answer a question using the retrieved chunks:
-    bring in the Anthropic toolkit
-    client = open a connection to Anthropic, using the API key saved on this computer
+    send the standing instructions (step 1) and the prompt (step 5) to the LLM
+    hand back its written answer
 
-    response = send a message to the model, including:
-        which model to use
-        the longest reply allowed
-        the standing instructions from step 1
-        one message from the "user": the prompt built in step 5
-        a request to retry on another model if this one declines
-
-    if the model declined to answer:
-        hand back a short notice saying so
-
-    otherwise:
-        take every part of the reply that is text
-        join them together
-        hand that back as the answer
+    if the LLM declines to answer:
+        hand back a short notice saying so instead
 ```
 
 **Key elements**
 
 | Code | What it means |
 |---|---|
-| `import anthropic` | Bring in Anthropic's toolkit for talking to Claude |
-| `anthropic.Anthropic()` | Open a connection to the service. It finds your API key by itself, so the key is never written in the code |
-| `client.beta.messages.create(...)` | Send a message and wait for the reply. `beta` is the part of the toolkit that offers newer features |
-| `model=ANSWER_MODEL` | Which model should answer |
-| `max_tokens=16000` | An upper limit on the reply's length. A *token* is a piece of a word; 16,000 tokens is many pages |
-| `system=SYSTEM` | The standing instructions from step 1 |
-| `messages=[{...}]` | The conversation so far, as a list. Here it holds one message |
-| `"role": "user"` | Who the message is from. `user` means the person asking |
-| `"content": build_prompt(...)` | What the message says: the prompt built in step 5 |
-| `betas=[...]`, `fallbacks="default"` | Switch on the optional retry-on-another-model feature |
-| `response.stop_reason` | Why the model stopped writing. `"refusal"` means it declined |
-| `response.content` | The reply, delivered as a list of blocks |
-| `block.type == "text"` | "Is this block ordinary text?" Some blocks hold other things, such as the model's reasoning |
-| `"".join(...)` | Glue the text blocks together with nothing between them |
+| `ask_claude(...)` | The project's one function for calling the LLM, in `llm.py` |
+| `try:` ... `except Declined as e:` | Attempt the call; if it reports that the model declined, use the message instead of crashing |
+| `str(e)` | The message carried by the error, as text |
 
 **Explanation**
 
-- `import anthropic` sits inside the function so that search-only mode works even without that package configured.
-- `anthropic.Anthropic()` creates the connection and picks up your API key from the environment, so the key never appears in the code.
-- The request sends the model name, the standing instructions (`system`) and the assembled prompt as the user's message. `max_tokens` is an upper limit on the length of the reply.
-- `betas` and `fallbacks` switch on an optional feature: if the model declines a request, the service automatically retries it on another model.
-- If it is still declined, a plain message is returned instead of an empty answer.
-- A reply arrives as a list of blocks, not all of which are text. The last line keeps the text blocks and joins them into the final answer.
+Until step 3, this function talked to the Anthropic service directly. Steps 3 to 5 call the LLM too, so that code moved into one shared function, `ask_claude` in [llm.py](llm.py). It picks the model, asks the service to retry on a fallback model if the first one declines, and raises `Declined` if the request is still declined. Keeping it in one place means every step behaves the same way.
 
 ### 7. Tie it together (`main`)
 
@@ -512,6 +474,91 @@ if --retrieve-only was not typed:
 **Explanation**
 
 The filters exist because many questions are really about a subset: "what do *death* reports say about occlusions", or "what was reported about *this brand* in *June*". `--values` lists the stored names with their report counts, which helps when choosing what to type for `--brand` or `--manufacturer`.
+
+### 8. One answer as a machine-readable record (`as_json`, `--json`)
+
+```python
+# MAUDE report numbers: 1234567-2025-00012, 1234567890-2025-000123, or MW1234567.
+REPORT_NUMBER = re.compile(r"\b(?:\d{7,10}-\d{4}-\d{5,6}|MW\d{7})\b")
+```
+
+```python
+def as_json(question: str, k: int, mode: str) -> dict:
+    """One answer in the AIPV harness contract: answer, cited_ids, retrieved_ids, config."""
+    hits = retrieve(question, k, None, mode)
+    text = answer(question, hits) if hits else ""
+    return {
+        "answer": text,
+        "cited_ids": list(dict.fromkeys(REPORT_NUMBER.findall(text))),
+        "retrieved_ids": list(dict.fromkeys(h["report_number"] for h in hits)),
+        "config": {
+            **LAST_CALL,
+            "system_prompt_sha256": hashlib.sha256(SYSTEM.encode()).hexdigest()[:16],
+            "embedding_model": EMBEDDING_MODEL,
+            "retrieval_mode": mode,
+            "top_k": k,
+            "index_chunks": _collection().count(),
+        },
+    }
+```
+
+```python
+    if args.json:
+        print(json.dumps(as_json(args.question or sys.stdin.read().strip(), args.k, args.mode)))
+        return
+```
+
+```bash
+python -m maude_rag.ask --json "What problems are reported with infusion sets?"
+echo "What problems are reported with infusion sets?" | python -m maude_rag.ask --json
+```
+
+**In plain steps**
+
+```
+REPORT_NUMBER = a text pattern that recognises MAUDE report numbers
+
+to produce one answer as a record:
+    hits = retrieve the best chunks for the question (no filters)
+    text = the LLM's answer, or empty text if nothing was retrieved
+
+    hand back a record with:
+        answer        = the answer text
+        cited_ids     = every report number that appears in the answer, each once, in order
+        retrieved_ids = every report number that was retrieved, each once, in order
+        config        = the settings this answer was produced under:
+            the model asked for, the model that answered, and the effort (from LAST_CALL)
+            a short fingerprint of the standing instructions (SYSTEM)
+            the embedding model, the search mode, and how many chunks were retrieved
+            how many chunks the database holds
+
+in main, if --json was typed:
+    take the question from the command line, or else read it from the input
+    print the record as JSON and stop
+```
+
+**Key elements**
+
+| Code | What it means |
+|---|---|
+| `re.compile(r"...")` | Prepare a text pattern. This one matches the three shapes of MAUDE report number: digits-year-digits, or `MW` followed by seven digits |
+| `retrieve(question, k, None, mode)` | Search as in step 4. `None` means no filters are applied |
+| `REPORT_NUMBER.findall(text)` | Every piece of the answer that matches the pattern |
+| `list(dict.fromkeys(...))` | Remove repeats while keeping the order |
+| `**LAST_CALL` | Copy in the record of the last LLM call: `model_requested`, `model_served` and `effort` (see [llm.md](llm.md), step 1) |
+| `hashlib.sha256(SYSTEM.encode()).hexdigest()[:16]` | A *hash*: a short code calculated from the text of the standing instructions. Any change to the text, even one character, gives a different code. The first 16 characters are kept |
+| `_collection().count()` | The number of chunks in the vector database |
+| `json.dumps(...)` | Write the record as JSON text |
+| `sys.stdin.read().strip()` | Read the question from the command's input instead, for example from another program |
+
+**Explanation**
+
+This step was added for an "AI Process Validation" (AIPV) harness: a separate program that sends questions to this one and checks the answers. Such a program cannot read the normal printed output reliably, so `--json` prints one record in a fixed layout instead. The function's own description calls this layout the harness "contract".
+
+Each part of the record lets the answer be checked or traced:
+
+- **`cited_ids` and `retrieved_ids`** let a checker compare what the answer cites with what was actually retrieved. A cited report number that was never retrieved would mean the answer is citing something it was not given.
+- **`config`** records what the answer depended on: which model was requested and which actually answered (they can differ when the fallback is used), the effort level, the standing instructions (by their hash), the embedding model, the search mode, the number of chunks retrieved, and the size of the database. If any of these changes between two runs, a difference in answers can be traced to it. The hash makes a change to the instructions visible without copying the whole text into every record.
 
 ## What to keep in mind
 

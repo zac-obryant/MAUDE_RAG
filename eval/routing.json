@@ -1,0 +1,11 @@
+[
+  {"id": "R01", "question": "Compare the problems reported for Tandem and Insulet pumps, then check for recalls", "expected": "agent"},
+  {"id": "R02", "question": "Have there been any FDA recalls of Omnipod pods?", "expected": "agent"},
+  {"id": "R03", "question": "Which manufacturer has the most death reports, and what do those reports say happened?", "expected": "agent"},
+  {"id": "R04", "question": "Are the battery problems in the reports related to any recalls?", "expected": "agent"},
+  {"id": "R05", "question": "How many reports mention a cracked pump case, and give three examples", "expected": "agent"},
+  {"id": "R06", "question": "What percentage of Beta Bionics reports are injuries?", "expected": "sql"},
+  {"id": "R07", "question": "Which month had the most reports of insulin leaking?", "expected": "sql"},
+  {"id": "R08", "question": "What do users say happens when the 780G screen goes blank?", "expected": "search"},
+  {"id": "R09", "question": "Describe the reports where a pump was damaged by water", "expected": "search"}
+]

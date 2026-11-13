@@ -1,12 +1,12 @@
-# MAUDE RAG: Hybrid Search Procedure
+# MAUDE RAG: Question Answering Procedure
 
 | Field | Value |
 |---|---|
 | **Document title** | Building and Running Question Answering over FDA MAUDE Reports |
 | **Document type** | Procedure |
-| **Revision** | C |
+| **Revision** | D |
 | **Effective date** | 2026-11-13 |
-| **Applies to** | Steps 1 and 2 of the project roadmap (see Section 9) |
+| **Applies to** | Steps 1 to 5 of the project roadmap (see Section 9) |
 
 > This is a learning project built in public. The document borrows the layout of a quality system procedure for clarity; it is not a controlled document and is not part of any certified quality management system.
 
@@ -14,24 +14,26 @@
 
 ## 1. Purpose
 
-This procedure describes how to set up and run question answering over the FDA's [MAUDE](https://www.fda.gov/medical-devices/mandatory-reporting-requirements-manufacturers-importers-and-device-user-facilities/manufacturer-and-user-facility-device-experience-database-maude) database of medical device adverse event reports, using retrieval-augmented generation (RAG) with hybrid search and metadata filters. The project is built in public, one step at a time.
+This procedure describes how to set up and run question answering over the FDA's [MAUDE](https://www.fda.gov/medical-devices/mandatory-reporting-requirements-manufacturers-importers-and-device-user-facilities/manufacturer-and-user-facility-device-experience-database-maude) database of medical device adverse event reports, The system reads a question and chooses how to answer it: by searching the reports (retrieval-augmented generation, RAG), by counting them with a database query, or with an agent that combines several steps, including a lookup of FDA recalls. The project is built in public, one step at a time.
 
 ## 2. Scope
 
 **In scope**
 
-- About 3,000 insulin pump reports received by the FDA in 2025 (250 per month, spread across every day of the month; a few duplicates are dropped).
+- About 3,000 insulin pump reports received by the FDA in 2025 (250 per month, spread across every day of the month; a few duplicates are dropped). A month whose last days have no reports can fall short, because no later day can take up their share: August 2025 has 234.
 - The reporter's "Description of Event or Problem" text from each report.
 - Downloading the reports, indexing them, and asking questions against them.
 - Narrowing a search by event type, brand, manufacturer and date received.
-- Scoring retrieval against a fixed test set of 20 questions.
+- Counting and ranking reports with LLM-written database queries.
+- Routing each question to search, counting, or the agent.
+- An agent for multi-step questions, with live lookup of FDA insulin pump recalls.
+- Scoring retrieval (20 questions), counting (12 questions) and routing (41 questions).
 
 **Out of scope**
 
 - Other device types and other years.
 - The manufacturer's follow-up narrative in each report.
-- Later roadmap steps (Section 9), including questions that need counting.
-- Scoring the quality of the written answers. Only retrieval is scored.
+- Scoring the quality of the written answers and of the agent's work. Retrieval, counting queries and routing decisions are scored; the prose is not.
 
 ## 3. Definitions
 
@@ -52,6 +54,11 @@ This procedure describes how to set up and run question answering over the FDA's
 | **Hit rate** | The share of questions for which at least one correct report was retrieved |
 | **Precision** | The share of retrieved reports that are correct, averaged over questions |
 | **MRR** | Mean reciprocal rank: 1 if the first correct report ranks first, 1/2 if second, and so on, averaged over questions |
+| **SQL** | The standard language for querying a database, used here for counting questions |
+| **Router** | The step that reads a question and chooses search, SQL or the agent |
+| **Adaptive RAG** | A RAG system that picks its answering method per question instead of always searching |
+| **Agent** | An LLM that decides which tools to call, in what order, and when it has enough to answer |
+| **Recall** | An FDA record of a manufacturer correcting or removing a device; looked up live from openFDA |
 
 A fuller glossary is in [docs/explainers](docs/explainers/README.md).
 
@@ -59,8 +66,8 @@ A fuller glossary is in [docs/explainers](docs/explainers/README.md).
 
 | Role | Responsibility |
 |---|---|
-| **User** | Runs this procedure and supplies their own Anthropic API key for the answering step |
-| **Test set reviewer** | Checks each test question and its correct reports, then sets `"reviewed": true` |
+| **User** | Runs this procedure and supplies their own Anthropic API key for the steps that call the LLM |
+| **Test set reviewer** | Checks each test question and its correct reports, then sets `"reviewed": true`; checks the reference queries in `eval/counting.json` and the expected routes in `eval/routing.json` |
 | **Reader of an answer** | Interprets the output within the limits stated in Section 7 |
 
 ## 5. References
@@ -68,6 +75,7 @@ A fuller glossary is in [docs/explainers](docs/explainers/README.md).
 | Reference | Location |
 |---|---|
 | openFDA device event API | <https://open.fda.gov/apis/device/event/> |
+| openFDA device recall API | <https://open.fda.gov/apis/device/recall/> |
 | Chroma vector database | <https://www.trychroma.com/> |
 | Plain-language walkthrough of each code file | [docs/explainers](docs/explainers/README.md) |
 
@@ -76,10 +84,17 @@ A fuller glossary is in [docs/explainers](docs/explainers/README.md).
 ### 6.1 Process flow
 
 ```
-Reports ─> chunk ─> embedding model ─> vector DB (with metadata)
+Reports ─┬─> chunk ─> embedding model ─> vector DB (with metadata)
+         └─> SQLite database (reports and coded problems)
 
+Question ─> router (LLM) ─┬─ search ─> hybrid search ─> prompt ─> LLM ─> answer quoting reports
+                          ├─ sql ────> LLM writes query ─> read-only database ─> LLM explains counts
+                          └─ agent ──> LLM calls tools in a loop:
+                                       search_reports, run_sql, check_recalls (openFDA, live)
+
+Hybrid search:
 Question ─┬─> embedding model ─> nearest chunks ─┐
-          │                                      ├─> merge (RRF) ─> prompt ─> LLM ─> answer
+          │                                      ├─> merge (RRF) ─> top chunks
           └─> BM25 keyword scores ─> top chunks ─┘
           (optional filters narrow both searches first)
 ```
@@ -92,15 +107,19 @@ Question ─┬─> embedding model ─> nearest chunks ─┐
 | **Embedding model** | `all-MiniLM-L6-v2` | Small, open-source, runs locally on a CPU |
 | **Vector DB** | Chroma | Stored on disk in `data/chroma`; also applies the metadata filters |
 | **Keyword search** | BM25, written in plain Python | No extra package; see `maude_rag/keyword.py` |
-| **LLM** | Claude | Called through the Anthropic API |
+| **Database** | SQLite (built into Python) | `data/reports.db`; opened read-only for LLM-written queries |
+| **LLM** | Claude (`claude-opus-5-5`) | Called through the Anthropic API, all calls in `maude_rag/llm.py`; retried on a fallback model if declined |
+| **Router** | One LLM call at low effort | Returns route, reason and filters as checked JSON |
+| **Agent** | Anthropic SDK tool runner | At most 10 rounds of tool calls; each call and a preview of its result is printed |
+| **Recalls** | openFDA device recall API | Fetched live; the four insulin pump product codes only |
 
 ### 6.3 Prerequisites
 
 | Item | Needed for |
 |---|---|
 | Python 3 | All steps |
-| Internet access | Steps 7.1 and 7.2, and the first run of step 7.3 (model download) |
-| Anthropic API key | Step 7.7 only |
+| Internet access | Steps 7.1 and 7.2, the first run of step 7.3 (model download), and every step that calls the LLM or looks up recalls |
+| Anthropic API key | Steps 7.7 to 7.10 and 7.13 |
 
 ## 7. Procedure
 
@@ -126,7 +145,7 @@ python -m maude_rag.ingest
 python -m maude_rag.index
 ```
 
-**Expected result:** the narratives are embedded and stored in `data/chroma`. This takes about a minute on a CPU.
+**Expected result:** the narratives are embedded and stored in `data/chroma`, and the reports are written to the database `data/reports.db`. This takes about a minute on a CPU.
 
 ### 7.4 Run a retrieval-only query
 
@@ -176,9 +195,42 @@ export ANTHROPIC_API_KEY=...
 python -m maude_rag.ask "What problems are reported with infusion sets?"
 ```
 
-**Expected result:** the retrieved excerpts, followed by a written answer that cites report numbers.
+**Expected result:** the retrieved excerpts, followed by a written answer that cites report numbers. Adding `--json` prints the same answer as one JSON record (answer, cited and retrieved report numbers, and the configuration that produced it), for use by a validation harness.
 
-### 7.8 Verify the installation
+### 7.8 Ask a counting question
+
+This step needs an Anthropic API key.
+
+```bash
+python -m maude_rag.sql "How many injury reports did each manufacturer have?"
+python -m maude_rag.sql --show-schema    # what the LLM is told about the database
+```
+
+**Expected result:** the query the LLM wrote, the rows it returned, and a short explanation. Check the query: it is the evidence for the numbers. If the first query fails, the LLM gets one retry with the error message.
+
+### 7.9 Ask any question and let the router choose
+
+This step needs an Anthropic API key.
+
+```bash
+python -m maude_rag.router "What do reports say about pumps getting wet?"            # search
+python -m maude_rag.router "Which month had the most death or injury reports?"       # sql
+python -m maude_rag.router --route-only "Have there been recalls of Omnipod pods?"   # agent, decision only
+```
+
+**Expected result:** the chosen route with a one-sentence reason and any filters, then the answer from that route.
+
+### 7.10 Ask a multi-step question
+
+This step needs an Anthropic API key and internet access for the recall lookup.
+
+```bash
+python -m maude_rag.agent "Compare the problems reported for Tandem and Insulet pumps, then check for recalls"
+```
+
+**Expected result:** one line per tool call (`-> search_reports(...)`, `-> run_sql(...)`, `-> check_recalls(...)`), each followed by a preview of what the tool returned, then an answer citing report numbers and recall event numbers. The agent stops after 10 rounds of tool calls and says so if it was cut short.
+
+### 7.11 Verify the installation
 
 ```bash
 python -m pytest
@@ -186,7 +238,7 @@ python -m pytest
 
 **Expected result:** all tests pass.
 
-### 7.9 Evaluate retrieval
+### 7.12 Evaluate retrieval
 
 No API key is needed for this step.
 
@@ -206,14 +258,30 @@ Add the procedure revision, the data download date, and any observations at the 
 
 **Limits:** the test set has 20 questions, so one question is 5 percentage points of hit rate. It was drafted by Claude and has not yet been reviewed by a person; until it is, treat the scores as provisional.
 
-### 7.10 Interpret the answers
+### 7.13 Evaluate counting and routing
+
+This step needs an Anthropic API key. Each question costs one or more LLM calls.
+
+```bash
+python -m maude_rag.evaluate_llm --suite counting -v
+python -m maude_rag.evaluate_llm --suite routing -v
+```
+
+**Expected result:** for counting, how many of the 12 questions in `eval/counting.json` produced the same rows as the reference query. For routing, how many of the 41 questions went to the expected route, with a breakdown of the mistakes. Save each run as in step 7.12.
+
+**Limits:** the agent's answers are not scored. Whether an answer is complete and correct still needs a person to read it.
+
+### 7.14 Interpret the answers
 
 Apply these limits to every answer:
 
 1. MAUDE is a passive reporting system. Reports are unverified and may be duplicated.
 2. A report does not show that a device caused an event.
 3. Report counts are not incidence rates.
-4. Nothing produced by this project is medical advice.
+4. Counts come from a sample of about 3,000 reports, not every report the FDA received.
+5. Recalls come from a separate FDA database and may concern other devices or years than the reports.
+6. Check the query behind any count, and the cited reports behind any claim.
+7. Nothing produced by this project is medical advice.
 
 ## 8. Records
 
@@ -221,8 +289,10 @@ Apply these limits to every answer:
 |---|---|---|
 | Downloaded reports | `data/reports.jsonl` | Step 7.2 |
 | Vector index | `data/chroma` | Step 7.3 |
-| Test set | `eval/questions.json` | Written by hand; see [docs/explainers/evaluate.md](docs/explainers/evaluate.md) |
-| Evaluation results | `eval/results/YYYY-MM-DD-N.md` | Step 7.9 |
+| Counting database | `data/reports.db` | Step 7.3 |
+| Retrieval test set | `eval/questions.json` | Written by hand; see [docs/explainers/evaluate.md](docs/explainers/evaluate.md) |
+| Counting and routing test sets | `eval/counting.json`, `eval/routing.json` | Written by hand; see [docs/explainers/evaluate_llm.md](docs/explainers/evaluate_llm.md) |
+| Evaluation results | `eval/results/YYYY-MM-DD-N.md` | Steps 7.12 and 7.13 |
 
 The `data` folder is excluded from version control and is rebuilt by repeating steps 7.2 and 7.3. The `eval` folder is kept in version control, so results can be compared over time.
 
@@ -232,9 +302,9 @@ The `data` folder is excluded from version control and is rebuilt by repeating s
 |---|---|---|
 | 1 | Naive RAG baseline, measured on a test set | Covered by this procedure |
 | 2 | Metadata filters and keyword search | Covered by this procedure |
-| 3 | SQL path for counting questions | Planned |
-| 4 | Query router (Adaptive RAG) | Planned |
-| 5 | Agentic retrieval | Planned (optional) |
+| 3 | SQL path for counting questions | Covered by this procedure; not yet run against the API |
+| 4 | Query router (Adaptive RAG) | Covered by this procedure; not yet run against the API |
+| 5 | Agentic retrieval | Covered by this procedure; not yet run against the API |
 
 ## 10. Revision History
 
@@ -243,3 +313,4 @@ The `data` folder is excluded from version control and is rebuilt by repeating s
 | A | 2026-11-13 | Initial release: Naive RAG baseline |
 | B | 2026-11-13 | Added metadata filters, BM25 keyword search and hybrid retrieval (roadmap step 2). Changed the download to sample every day of each month; Revision A took only the first day or two of each month. Repeat steps 7.2 and 7.3 after updating |
 | C | 2026-11-13 | Added the 20-question test set and the retrieval scorer (step 7.9), completing roadmap step 1's baseline. Results recorded in `eval/results/2026-11-13-1.md` (first draft of the test set) and `eval/results/2026-11-13-2.md` (six weak questions replaced) |
+| D | 2026-11-13 | Added the SQL path (step 3), the router (step 4) and the agent with live recall lookup (step 5), with steps 7.8 to 7.10 and 7.13. Steps 7.8 to 7.10 renumbered to 7.11, 7.12 and 7.14. The counting database is built in step 7.3; repeat it after updating. The LLM steps were built and unit-tested but not yet run against the API |

@@ -1,0 +1,14 @@
+[
+  {"id": "C01", "question": "How many reports are in the database?", "reference_sql": "SELECT COUNT(*) FROM reports"},
+  {"id": "C02", "question": "How many reports of each event type are there?", "reference_sql": "SELECT event_type, COUNT(*) FROM reports GROUP BY event_type"},
+  {"id": "C03", "question": "How many death reports are there?", "reference_sql": "SELECT COUNT(*) FROM reports WHERE event_type = 'DEATH'"},
+  {"id": "C04", "question": "How many reports mention Beta Bionics as the manufacturer?", "reference_sql": "SELECT COUNT(*) FROM reports WHERE manufacturer LIKE '%BETA BIONIC%'"},
+  {"id": "C05", "question": "What are the five most common device problems, and how many reports have each?", "reference_sql": "SELECT problem, COUNT(DISTINCT report_number) FROM problems GROUP BY problem ORDER BY 2 DESC LIMIT 5"},
+  {"id": "C06", "question": "How many injury reports did Tandem Diabetes Care have?", "reference_sql": "SELECT COUNT(*) FROM reports WHERE event_type = 'INJURY' AND manufacturer LIKE '%TANDEM%'"},
+  {"id": "C07", "question": "How many reports were received in each month?", "reference_sql": "SELECT month, COUNT(*) FROM reports GROUP BY month"},
+  {"id": "C08", "question": "How many reports have the problem 'Battery Problem'?", "reference_sql": "SELECT COUNT(DISTINCT report_number) FROM problems WHERE problem = 'Battery Problem'"},
+  {"id": "C09", "question": "How many reports use the word ketoacidosis in the narrative?", "reference_sql": "SELECT COUNT(*) FROM reports WHERE narrative LIKE '%KETOACIDOSIS%'"},
+  {"id": "C10", "question": "How many reports are there for each product code?", "reference_sql": "SELECT product_code, COUNT(*) FROM reports GROUP BY product_code"},
+  {"id": "C11", "question": "Which company has the most injury reports, counting all spellings of its name together? Give the count.", "reference_sql": "SELECT COUNT(*) FROM reports WHERE event_type = 'INJURY' AND manufacturer LIKE '%MEDTRONIC%'", "note": "The answer is Medtronic. Only the count is compared, because a correct query can label the company in many ways; grouping by raw spelling gives 415, which is wrong."},
+  {"id": "C12", "question": "How many Omnipod reports have the problem 'Material Twisted/Bent'?", "reference_sql": "SELECT COUNT(DISTINCT r.report_number) FROM reports r JOIN problems p ON p.report_number = r.report_number WHERE r.brand_name LIKE '%OMNIPOD%' AND p.problem = 'Material Twisted/Bent'"}
+]

@@ -1,10 +1,11 @@
-"""Step 1b (updated in step 2): embed the narratives and store them in a vector database.
+"""Step 1b (updated in steps 2 and 3): embed the narratives and store them in a vector database.
 
     python -m maude_rag.index
 
 Each narrative is split into overlapping chunks, each chunk is turned into a
 vector by the embedding model, and the vectors go into a local Chroma database
-alongside the report's metadata.
+alongside the report's metadata. Since step 3 it also writes the reports into a
+SQLite database (data/reports.db) for counting questions.
 """
 
 import json
@@ -14,12 +15,14 @@ from sentence_transformers import SentenceTransformer
 
 from .config import (
     CHROMA_DIR,
+    DB_PATH,
     CHUNK_OVERLAP,
     CHUNK_WORDS,
     COLLECTION,
     EMBEDDING_MODEL,
     RAW_REPORTS,
 )
+from .sql import build as build_database
 
 BATCH = 1000
 
@@ -71,6 +74,9 @@ def main() -> None:
             metadatas=metadatas[start:end],
         )
     print(f"Indexed {collection.count()} chunks into {CHROMA_DIR}")
+
+    build_database(reports)  # step 3: the same reports as a SQLite table, for counting
+    print(f"Built {DB_PATH}")
 
 
 if __name__ == "__main__":

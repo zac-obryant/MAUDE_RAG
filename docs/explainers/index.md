@@ -261,6 +261,30 @@ show how many chunks the collection now holds
 
 The chunks are added in batches of 1,000 because the database limits how much it accepts in one go. Each batch hands over the IDs, texts, vectors and metadata together. The final line prints how many chunks ended up stored, as a check that nothing was lost.
 
+### 6. Also build the counting database (step 3)
+
+```python
+build_database(reports)  # step 3: the same reports as a SQLite table, for counting
+print(f"Built {DB_PATH}")
+```
+
+**In plain steps**
+
+```
+write the same reports into a database file (data/reports.db)
+show where it was saved
+```
+
+**Key elements**
+
+| Code | What it means |
+|---|---|
+| `build_database(reports)` | The `build` function from `sql.py`, given a clearer name where it is imported |
+
+**Explanation**
+
+Search cannot count, so step 3 keeps a second copy of the reports as a database table that can answer "how many" questions. Building it here means one command, `python -m maude_rag.index`, prepares everything. It takes under a second. See [sql.md](sql.md).
+
 ## What to keep in mind
 
 - The vectors are supplied to Chroma directly instead of letting Chroma compute them. That keeps the embedding step visible and guarantees the same model is used here and in `ask.py`.

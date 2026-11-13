@@ -11,15 +11,22 @@ before anything is ranked. The top chunks go into a prompt for the LLM.
 """
 
 import argparse
+import hashlib
 import json
+import re
+import sys
 from collections import Counter
 from functools import cache
 
 import chromadb
 from sentence_transformers import SentenceTransformer
 
-from .config import ANSWER_MODEL, CHROMA_DIR, COLLECTION, EMBEDDING_MODEL, RAW_REPORTS, TOP_K
+from .config import CHROMA_DIR, COLLECTION, EMBEDDING_MODEL, RAW_REPORTS, TOP_K
 from .keyword import bm25, rrf
+from .llm import LAST_CALL, Declined, ask_claude
+
+# MAUDE report numbers: 1234567-2025-00012, 1234567890-2025-000123, or MW1234567.
+REPORT_NUMBER = re.compile(r"\b(?:\d{7,10}-\d{4}-\d{5,6}|MW\d{7})\b")
 
 SYSTEM = """You answer questions about insulin pump adverse events using excerpts \
 from FDA MAUDE reports.
@@ -135,21 +142,29 @@ def build_prompt(question: str, hits: list[dict]) -> str:
 
 
 def answer(question: str, hits: list[dict]) -> str:
-    import anthropic
+    try:
+        return ask_claude(SYSTEM, build_prompt(question, hits))
+    except Declined as e:
+        return str(e)
 
-    client = anthropic.Anthropic()  # reads ANTHROPIC_API_KEY from the environment
-    response = client.beta.messages.create(
-        model=ANSWER_MODEL,
-        max_tokens=16000,
-        system=SYSTEM,
-        messages=[{"role": "user", "content": build_prompt(question, hits)}],
-        # If the model declines a request, the API retries it on a fallback model.
-        betas=["server-side-fallback-2026-07-01"],
-        fallbacks="default",
-    )
-    if response.stop_reason == "refusal":
-        return "The model declined to answer this question."
-    return "".join(block.text for block in response.content if block.type == "text")
+
+def as_json(question: str, k: int, mode: str) -> dict:
+    """One answer in the AIPV harness contract: answer, cited_ids, retrieved_ids, config."""
+    hits = retrieve(question, k, None, mode)
+    text = answer(question, hits) if hits else ""
+    return {
+        "answer": text,
+        "cited_ids": list(dict.fromkeys(REPORT_NUMBER.findall(text))),
+        "retrieved_ids": list(dict.fromkeys(h["report_number"] for h in hits)),
+        "config": {
+            **LAST_CALL,
+            "system_prompt_sha256": hashlib.sha256(SYSTEM.encode()).hexdigest()[:16],
+            "embedding_model": EMBEDDING_MODEL,
+            "retrieval_mode": mode,
+            "top_k": k,
+            "index_chunks": _collection().count(),
+        },
+    }
 
 
 def main() -> None:
@@ -165,8 +180,13 @@ def main() -> None:
     filters.add_argument("--since", type=int, metavar="YYYYMMDD", help="received on or after")
     filters.add_argument("--until", type=int, metavar="YYYYMMDD", help="received on or before")
     parser.add_argument("--values", metavar="FIELD", help="list common values of a field and exit")
+    parser.add_argument("--json", action="store_true",
+                        help="print one JSON answer for the AIPV harness; reads the question from stdin if not given")
     args = parser.parse_args()
 
+    if args.json:
+        print(json.dumps(as_json(args.question or sys.stdin.read().strip(), args.k, args.mode)))
+        return
     if args.values:
         for value, count in values(args.values):
             print(f"{count:6d}  {value}")
